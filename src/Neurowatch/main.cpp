@@ -123,13 +123,26 @@ uint8_t      pLength        = 0;
 uint8_t      payloadIdx     = 0;
 uint8_t      checksumAccum  = 0;
 
-// ─── MOTOR VIBRACIÓN ─────────────────────────────────────────────────────
-#define MOTOR_PIN 4
+// ─── MOTOR VIBRACIÓN (DRV2605L via I2C) ──────────────────────────────────
+Adafruit_DRV2605 *drv = nullptr;
 bool motorOn = false;
 unsigned long vibStartTime = 0;
 unsigned long vibLastToggle = 0;
 bool vibActiva = false;          // vibración intermitente med=100 activa
 bool vibEstado = false;          // estado actual del motor en intermitente
+
+// Función helper para disparar un efecto del DRV2605
+void drvPlayEffect(uint8_t effect) {
+  if (!drv) return;
+  drv->setWaveform(0, effect);
+  drv->setWaveform(1, 0);
+  drv->go();
+}
+
+void drvStop() {
+  if (!drv) return;
+  drv->stop();
+}
 
 // ─── MENÚ / UMBRAL ──────────────────────────────────────────────────────
 bool menuActivo = false;
@@ -511,41 +524,78 @@ void drawMenuScreen() {
   tft->fillRoundRect(0, 0, SCREEN_W, 28, 0, COLOR_HEADER);
   tft->setTextColor(COLOR_TEXT, COLOR_HEADER);
   tft->setTextDatum(MC_DATUM);
-  tft->drawString("MENU VIBRACION", SCREEN_W / 2, 14, 2);
+  tft->drawString("MENU", SCREEN_W / 2, 14, 2);
 
-  // Umbral activo
-  tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
+  // ── Batería ──────────────────────────────────────────────
+  int   batPct    = power->getBattPercentage();
+  float batVolt   = power->getBattVoltage();
+  bool  charging  = power->isChargeing();
+  bool  connected = power->isBatteryConnect();
+
+  // Color según nivel
+  uint16_t batColor;
+  if (!connected)         batColor = COLOR_TEXT_DIM;
+  else if (batPct >= 60)  batColor = TFT_GREEN;
+  else if (batPct >= 30)  batColor = TFT_YELLOW;
+  else                    batColor = TFT_RED;
+
+  // Porcentaje grande
+  char batBuf[16];
+  snprintf(batBuf, sizeof(batBuf), "%d%%", connected ? batPct : 0);
+  tft->setTextColor(batColor, COLOR_BG);
   tft->setTextDatum(MC_DATUM);
+  tft->drawString(batBuf, SCREEN_W / 2, 44, 4);
+
+  // Voltaje y estado de carga
+  char voltBuf[32];
+  if (!connected) {
+    snprintf(voltBuf, sizeof(voltBuf), "Sin bateria");
+  } else if (charging) {
+    snprintf(voltBuf, sizeof(voltBuf), "Cargando %.0fmV", batVolt);
+  } else if (batPct >= 100) {
+    snprintf(voltBuf, sizeof(voltBuf), "Carga completa");
+  } else {
+    snprintf(voltBuf, sizeof(voltBuf), "%.0f mV", batVolt);
+  }
+  tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
+  tft->drawString(voltBuf, SCREEN_W / 2, 70, 1);
+
+  // Línea separadora
+  tft->drawFastHLine(10, 82, SCREEN_W - 20, COLOR_TEXT_DIM);
+
+  // ── Umbral activo ────────────────────────────────────────
   char umbBuf[32];
   if (umbralVibracion == 0) snprintf(umbBuf, sizeof(umbBuf), "Vibra: OFF");
   else snprintf(umbBuf, sizeof(umbBuf), "Vibra: >= %d", umbralVibracion);
-  tft->drawString(umbBuf, SCREEN_W / 2, 40, 2);
+  tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
+  tft->drawString(umbBuf, SCREEN_W / 2, 93, 2);
 
-  // Botón 70 (y=60, h=40)
+  // ── Botones umbral (h=32, compactos) ────────────────────
+  // Botón 70 (y=108)
   uint16_t c70 = (umbralVibracion == 70) ? TFT_GREEN : COLOR_BAR_BG;
-  tft->fillRoundRect(20, 60, 200, 40, 8, c70);
-  tft->drawRoundRect(20, 60, 200, 40, 8, COLOR_TEXT_DIM);
+  tft->fillRoundRect(20, 108, 200, 32, 6, c70);
+  tft->drawRoundRect(20, 108, 200, 32, 6, COLOR_TEXT_DIM);
   tft->setTextColor(COLOR_TEXT, c70);
-  tft->drawString("70", SCREEN_W / 2, 80, 4);
+  tft->drawString("70", SCREEN_W / 2, 124, 4);
 
-  // Botón 80 (y=110, h=40)
+  // Botón 80 (y=146)
   uint16_t c80 = (umbralVibracion == 80) ? TFT_GREEN : COLOR_BAR_BG;
-  tft->fillRoundRect(20, 110, 200, 40, 8, c80);
-  tft->drawRoundRect(20, 110, 200, 40, 8, COLOR_TEXT_DIM);
+  tft->fillRoundRect(20, 146, 200, 32, 6, c80);
+  tft->drawRoundRect(20, 146, 200, 32, 6, COLOR_TEXT_DIM);
   tft->setTextColor(COLOR_TEXT, c80);
-  tft->drawString("80", SCREEN_W / 2, 130, 4);
+  tft->drawString("80", SCREEN_W / 2, 162, 4);
 
-  // Botón 90 (y=160, h=40)
+  // Botón 90 (y=184)
   uint16_t c90 = (umbralVibracion == 90) ? TFT_GREEN : COLOR_BAR_BG;
-  tft->fillRoundRect(20, 160, 200, 40, 8, c90);
-  tft->drawRoundRect(20, 160, 200, 40, 8, COLOR_TEXT_DIM);
+  tft->fillRoundRect(20, 184, 200, 32, 6, c90);
+  tft->drawRoundRect(20, 184, 200, 32, 6, COLOR_TEXT_DIM);
   tft->setTextColor(COLOR_TEXT, c90);
-  tft->drawString("90", SCREEN_W / 2, 180, 4);
+  tft->drawString("90", SCREEN_W / 2, 200, 4);
 
-  // Botón Exit (y=210, h=25)
-  tft->fillRoundRect(20, 210, 200, 25, 6, TFT_RED);
+  // Botón EXIT (y=222)
+  tft->fillRoundRect(20, 222, 200, 15, 4, TFT_RED);
   tft->setTextColor(COLOR_TEXT, TFT_RED);
-  tft->drawString("EXIT", SCREEN_W / 2, 222, 2);
+  tft->drawString("EXIT", SCREEN_W / 2, 229, 1);
 }
 
 void drawConnectScreen(const char* status, const char* detail) {
@@ -610,9 +660,11 @@ void setup() {
   tft->setSwapBytes(true);
   watch->setBrightness(180);
 
-  // ── Inicializar motor vibración ──
-  pinMode(MOTOR_PIN, OUTPUT);
-  digitalWrite(MOTOR_PIN, LOW);
+  // ── Inicializar motor vibración (DRV2605L via I2C) ──
+  watch->enableDrv2650();       // AXP202 GPIO0 alimenta el DRV2605L
+  drv = watch->drv;
+  drv->selectLibrary(1);
+  drv->setMode(DRV2605_MODE_INTTRIG);
 
   drawConnectScreen("Iniciando BT...", "Configurando SPP");
 
@@ -748,6 +800,7 @@ void loop() {
                         (d == dotPhase) ? TFT_CYAN : COLOR_BAR_BG);
       }
     }
+
     return;
   }
 
@@ -785,21 +838,21 @@ void loop() {
 
     if (menuActivo) {
       // Touch en pantalla menú
-      if (ty >= 60 && ty <= 100) {                   // Botón 70
+      if (ty >= 108 && ty <= 140) {                  // Botón 70
         umbralVibracion = (umbralVibracion == 70) ? 0 : 70;
         drawMenuScreen();
-      } else if (ty >= 110 && ty <= 150) {           // Botón 80
+      } else if (ty >= 146 && ty <= 178) {           // Botón 80
         umbralVibracion = (umbralVibracion == 80) ? 0 : 80;
         drawMenuScreen();
-      } else if (ty >= 160 && ty <= 200) {           // Botón 90
+      } else if (ty >= 184 && ty <= 216) {           // Botón 90
         umbralVibracion = (umbralVibracion == 90) ? 0 : 90;
         drawMenuScreen();
-      } else if (ty >= 210 && ty <= 235) {           // Botón Exit
+      } else if (ty >= 222 && ty <= 237) {           // Botón Exit
         menuActivo = false;
         lastDisplayUpdate = 0; // forzar redibujado
       }
     } else {
-      // Touch en pantalla principal — botón Menu (x:180-238, y:1-27)
+      // Touch en pantalla principal o de conexión — botón Menu (x:180-238, y:1-27)
       if (tx >= 180 && tx <= 238 && ty >= 1 && ty <= 27) {
         menuActivo = true;
         drawMenuScreen();
@@ -839,20 +892,25 @@ void loop() {
         vibStartTime = now;
         vibLastToggle = now;
         vibEstado = true;
-        digitalWrite(MOTOR_PIN, HIGH);
+        drvPlayEffect(15);  // 750ms Alert 100%
       }
     } else {
-      // Meditación >= umbral pero < 100: vibración continua corta
+      // Meditación >= umbral pero < 100: vibración continua
       if (!motorOn) {
         motorOn = true;
-        digitalWrite(MOTOR_PIN, HIGH);
+        drvPlayEffect(52);  // Pulsing Strong 1 100%
+      }
+      // Re-disparar efecto cada 800ms para mantener vibración continua
+      if (motorOn && (now - vibLastToggle >= 800)) {
+        vibLastToggle = now;
+        drvPlayEffect(52);
       }
     }
   } else {
     // Meditación bajo umbral: apagar motor (si no hay intermitente activa)
     if (!vibActiva && motorOn) {
       motorOn = false;
-      digitalWrite(MOTOR_PIN, LOW);
+      drvStop();
     }
   }
 
@@ -862,12 +920,16 @@ void loop() {
       // Pasaron 3 segundos: terminar
       vibActiva = false;
       vibEstado = false;
-      digitalWrite(MOTOR_PIN, LOW);
+      drvStop();
     } else if (now - vibLastToggle >= 300) {
       // Toggle cada 300ms
       vibLastToggle = now;
       vibEstado = !vibEstado;
-      digitalWrite(MOTOR_PIN, vibEstado ? HIGH : LOW);
+      if (vibEstado) {
+        drvPlayEffect(15);  // 750ms Alert 100%
+      } else {
+        drvStop();
+      }
     }
   }
 
