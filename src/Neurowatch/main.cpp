@@ -49,7 +49,7 @@
 // #define LILYGO_WATCH_2020_V3
 
 #include <Arduino.h>
-
+//hola prueba git
 #include <LilyGoWatch.h>
 #include "BluetoothSerial.h"
 
