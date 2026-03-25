@@ -131,6 +131,9 @@ unsigned long vibLastToggle = 0;
 bool vibActiva = false;          // vibración intermitente med=100 activa
 bool vibEstado = false;          // estado actual del motor en intermitente
 
+// Forward declarations
+void drawInicioScreen();
+
 // Función helper para disparar un efecto del DRV2605
 void drvPlayEffect(uint8_t effect) {
   if (!drv) return;
@@ -398,12 +401,12 @@ void drawInicioScreen() {
   // Titulo
   tft->setTextDatum(MC_DATUM);
   tft->setTextColor(COLOR_ATTENTION, COLOR_BG);
-  tft->drawString("NEURO-CRAWLER", SCREEN_W / 2, 50, 4);
+  tft->drawString("GAPAXIONSZ", SCREEN_W / 2, 50, 4);
 
   // Subtitulo
   tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
-  tft->drawString("MindWave Mobile", SCREEN_W / 2, 85, 2);
-  tft->drawString("Neurofeedback System", SCREEN_W / 2, 105, 2);
+  tft->drawString("RodriSZ", SCREEN_W / 2, 85, 2);
+  tft->drawString("Neurofeedback Entrenamiento", SCREEN_W / 2, 105, 2);
 
   // Boton CONECTAR
   tft->fillRoundRect(40, 140, 160, 50, 8, TFT_BLUE);
@@ -419,8 +422,25 @@ void drawInicioScreen() {
 
   // Instruccion
   tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
-  tft->drawString("Enciende MindWave", SCREEN_W / 2, 210, 1);
-  tft->drawString("y pulsa CONECTAR", SCREEN_W / 2, 224, 1);
+  tft->drawString("Pulsa CONECTAR", SCREEN_W / 2, 210, 1);
+  tft->drawString("y Enciende MindWave", SCREEN_W / 2, 224, 1);
+}
+
+void finalizarSesion() {
+  drvStop();
+  if (btIniciado) {
+    SerialBT.disconnect();
+    SerialBT.end();
+  }
+  btConnected = false;
+  btIniciado = false;
+  dataReceived = false;
+  connectAttempts = 0;
+  totalPackets = 0;
+  badChecksums = 0;
+  menuActivo = false;
+  pantallaInicio = true;
+  drawInicioScreen();
 }
 
 void drawMainScreen() {
@@ -631,7 +651,13 @@ void drawMenuScreen() {
   // Línea separadora
   tft->drawFastHLine(10, 130, SCREEN_W - 20, COLOR_TEXT_DIM);
 
-  // ── Espacio libre y=135 a y=205 para futuros botones ──
+  // ── Botón FIN (y=140, h=30) — finalizar sesión ──
+  tft->fillRoundRect(20, 140, 200, 30, 6, TFT_ORANGE);
+  tft->drawRoundRect(20, 140, 200, 30, 6, TFT_YELLOW);
+  tft->setTextColor(COLOR_TEXT, TFT_ORANGE);
+  tft->drawString("FIN SESION", SCREEN_W / 2, 155, 2);
+
+  // ── Espacio libre y=180 a y=205 para futuros botones ──
 
   // Botón EXIT (y=210, h=26)
   tft->fillRoundRect(20, 210, 200, 26, 4, TFT_RED);
@@ -789,6 +815,8 @@ void loop() {
           if (tx >= 5 && tx <= 71)        { umbralVibracion = (umbralVibracion == 70) ? 0 : 70; drawMenuScreen(); }
           else if (tx >= 76 && tx <= 142) { umbralVibracion = (umbralVibracion == 80) ? 0 : 80; drawMenuScreen(); }
           else if (tx >= 147 && tx <= 213){ umbralVibracion = (umbralVibracion == 90) ? 0 : 90; drawMenuScreen(); }
+        } else if (ty >= 140 && ty <= 170) {          // Botón FIN SESION
+          finalizarSesion();
         } else if (ty >= 210 && ty <= 236) {
           menuActivo = false;
           drawInicioScreen();
@@ -929,6 +957,9 @@ void loop() {
         if (tx >= 5 && tx <= 71)        { umbralVibracion = (umbralVibracion == 70) ? 0 : 70; drawMenuScreen(); }
         else if (tx >= 76 && tx <= 142) { umbralVibracion = (umbralVibracion == 80) ? 0 : 80; drawMenuScreen(); }
         else if (tx >= 147 && tx <= 213){ umbralVibracion = (umbralVibracion == 90) ? 0 : 90; drawMenuScreen(); }
+      } else if (ty >= 140 && ty <= 170) {           // Botón FIN SESION
+        finalizarSesion();
+        return;
       } else if (ty >= 210 && ty <= 236) {           // Botón Exit
         menuActivo = false;
         lastDisplayUpdate = 0; // forzar redibujado
