@@ -411,6 +411,12 @@ void drawInicioScreen() {
   tft->setTextColor(COLOR_TEXT, TFT_BLUE);
   tft->drawString("CONECTAR", SCREEN_W / 2, 165, 4);
 
+  // ── BOTÓN MENU (esquina superior derecha) ──
+  tft->fillRoundRect(180, 1, 58, 26, 4, TFT_BLUE);
+  tft->setTextColor(COLOR_TEXT, TFT_BLUE);
+  tft->setTextDatum(MC_DATUM);
+  tft->drawString("Menu", 209, 14, 2);
+
   // Instruccion
   tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
   tft->drawString("Enciende MindWave", SCREEN_W / 2, 210, 1);
@@ -556,8 +562,9 @@ void drawMenuScreen() {
   tft->drawString("MENU", SCREEN_W / 2, 14, 2);
 
   // ── Batería ──────────────────────────────────────────────
-  int   batPct    = power->getBattPercentage();
   float batVolt   = power->getBattVoltage();
+  // Calcular % desde voltaje (getBattPercentage() devuelve 127 sin calibrar)
+  int   batPct    = constrain((int)((batVolt - 3000.0) / (4200.0 - 3000.0) * 100.0), 0, 100);
   bool  charging  = power->isChargeing();
   bool  connected = power->isBatteryConnect();
 
@@ -770,10 +777,33 @@ void loop() {
     int16_t tx, ty;
     if (watch->getTouch(tx, ty) && (now - lastTouchTime > 400)) {
       lastTouchTime = now;
-      // Boton CONECTAR: x:40-200, y:140-190
-      if (tx >= 40 && tx <= 200 && ty >= 140 && ty <= 190) {
-        pantallaInicio = false;
-        iniciarBluetooth();
+
+      if (menuActivo) {
+        // Touch en pantalla menú (desde inicio)
+        if (ty >= 108 && ty <= 140) {
+          umbralVibracion = (umbralVibracion == 70) ? 0 : 70;
+          drawMenuScreen();
+        } else if (ty >= 146 && ty <= 178) {
+          umbralVibracion = (umbralVibracion == 80) ? 0 : 80;
+          drawMenuScreen();
+        } else if (ty >= 184 && ty <= 216) {
+          umbralVibracion = (umbralVibracion == 90) ? 0 : 90;
+          drawMenuScreen();
+        } else if (ty >= 222 && ty <= 237) {
+          menuActivo = false;
+          drawInicioScreen();
+        }
+      } else {
+        // Boton MENU: x:180-238, y:1-27
+        if (tx >= 180 && tx <= 238 && ty >= 1 && ty <= 27) {
+          menuActivo = true;
+          drawMenuScreen();
+        }
+        // Boton CONECTAR: x:40-200, y:140-190
+        else if (tx >= 40 && tx <= 200 && ty >= 140 && ty <= 190) {
+          pantallaInicio = false;
+          iniciarBluetooth();
+        }
       }
     }
     return;
