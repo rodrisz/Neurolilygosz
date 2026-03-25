@@ -194,6 +194,16 @@ float walkUltimoTiming   = 0;      // ultimo tiempo entre pasos (ms)
 float walkUltimoPuntaje  = 0;      // puntaje del ultimo paso
 bool  walkGuiaActiva     = false;  // guia haptica activa (nivel 1)
 
+// Deteccion de pasos: 0=AUTO (pico acelerometro), 1=TAP (toque pantalla)
+int   walkDeteccionMode  = 0;
+
+// Peak detection para modo AUTO
+float walkPrevMag        = 0;
+bool  walkPeakAbove      = false;
+unsigned long walkLastPeakTime = 0;
+#define WALK_PEAK_THRESHOLD 1150.0f  // mg — umbral de impacto de paso
+#define WALK_PEAK_DEBOUNCE  1000     // ms — minimo entre pasos detectados
+
 // Buffer acelerometro para suavidad
 #define WALK_ACCEL_BUF_SIZE 50
 float walkAccelSamples[WALK_ACCEL_BUF_SIZE];
@@ -225,6 +235,7 @@ void drawWalkingScreen();
 void drawWalkingResultScreen();
 void iniciarWalkingExercise();
 void finalizarWalkingMed();
+void registrarPaso(unsigned long now);
 
 // Estado del callback BT para mostrar en pantalla
 String btStatus = "Inicializando...";
@@ -535,8 +546,11 @@ void iniciarWalkingExercise() {
   walkUltimoPuntaje  = 0;
   walkAccelIdx       = 0;
   walkAccelCount     = 0;
+  walkPrevMag        = 0;
+  walkPeakAbove      = false;
+  walkLastPeakTime   = 0;
 
-  // Reset step counter
+  // Reset step counter (usado solo en modo AUTO como referencia)
   BMA *bma = watch->bma;
   bma->resetStepCounter();
   walkStepCountPrev = 0;
@@ -611,6 +625,48 @@ void getWalkLabel(float puntaje, const char *&label, uint16_t &color) {
   else                    { label = "Agitado";   color = TFT_RED;    }
 }
 
+// Registra un paso detectado (modo AUTO o TAP): calcula timing, puntaje, haptic, fin sesion
+void registrarPaso(unsigned long now) {
+  walkPasosContados++;
+
+  float tiempoEntrePasos = (float)(now - walkUltimoPaso);
+  walkUltimoPaso   = now;
+  walkUltimoTiming = tiempoEntrePasos;
+
+  if (walkPasosContados > 1) {
+    float accelStdDev = calcAccelStdDev();
+    float puntaje     = evaluarPaso(tiempoEntrePasos, accelStdDev);
+    walkUltimoPuntaje = puntaje;
+    drvPlayEffect(puntaje >= 60 ? 7 : 12);
+    Serial.printf("[WALK] Paso %d: %.1fs (obj:%.1fs) stdDev:%.0f punt:%.0f\n",
+                  walkPasosContados, tiempoEntrePasos / 1000.0,
+                  walkTiempoObjetivo / 1000.0, accelStdDev, puntaje);
+  }
+
+  // Reset buffer acelerometro para siguiente paso
+  walkAccelIdx   = 0;
+  walkAccelCount = 0;
+
+  // Reiniciar guia haptica desde este paso
+  walkNextGuiaTime = now + (unsigned long)walkTiempoObjetivo;
+
+  // Comprobar fin de sesion
+  if (walkPasosContados >= walkPasosObjetivo) {
+    if (walkPasosEvaluados > 0) {
+      walkRitmoFinal    = walkSumaRitmo / walkPasosEvaluados;
+      walkSuavidadFinal = walkSumaSuavidad / walkPasosEvaluados;
+      walkPuntajeFinal  = (walkRitmoFinal * 0.5) + (walkSuavidadFinal * 0.5);
+    }
+    walkingMedEjercicio = false;
+    walkingMedResultado = true;
+    drvStop();
+    drvPlayEffect(walkPuntajeFinal >= 70 ? 14 : 4);
+    drawWalkingResultScreen();
+    Serial.printf("[WALK] COMPLETO! Puntaje: %.0f (Ritmo:%.0f Suav:%.0f)\n",
+                  walkPuntajeFinal, walkRitmoFinal, walkSuavidadFinal);
+  }
+}
+
 void drawWalkingSelScreen() {
   tft->fillScreen(COLOR_BG);
 
@@ -656,23 +712,32 @@ void drawWalkingSelScreen() {
   tft->setTextColor(COLOR_TEXT, c3);
   tft->drawString("Lv.3", x3 + btnW / 2, btnY + btnH / 2, 2);
 
-  // Descripcion guia haptica
+  // Botones AUTO / TAP (modo deteccion de pasos)
   tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
-  if (lv.guiaHaptica)
-    tft->drawString("Guia haptica: SI", SCREEN_W / 2, 148, 1);
-  else
-    tft->drawString("Guia haptica: NO", SCREEN_W / 2, 148, 1);
+  tft->drawString("Deteccion:", SCREEN_W / 2, 140, 1);
 
-  // Boton INICIAR (y=165, h=35)
-  tft->fillRoundRect(30, 165, 180, 35, 8, TFT_GREEN);
-  tft->drawRoundRect(30, 165, 180, 35, 8, TFT_WHITE);
+  uint16_t cAuto = (walkDeteccionMode == 0) ? TFT_GREEN : COLOR_BAR_BG;
+  uint16_t cTap  = (walkDeteccionMode == 1) ? TFT_GREEN : COLOR_BAR_BG;
+  tft->fillRoundRect(20,  152, 90, 26, 6, cAuto);
+  tft->drawRoundRect(20,  152, 90, 26, 6, COLOR_TEXT_DIM);
+  tft->setTextColor(COLOR_TEXT, cAuto);
+  tft->drawString("AUTO", 65, 165, 2);
+
+  tft->fillRoundRect(130, 152, 90, 26, 6, cTap);
+  tft->drawRoundRect(130, 152, 90, 26, 6, COLOR_TEXT_DIM);
+  tft->setTextColor(COLOR_TEXT, cTap);
+  tft->drawString("TAP", 175, 165, 2);
+
+  // Boton INICIAR (y=188, h=30)
+  tft->fillRoundRect(30, 188, 180, 30, 8, TFT_GREEN);
+  tft->drawRoundRect(30, 188, 180, 30, 8, TFT_WHITE);
   tft->setTextColor(TFT_BLACK, TFT_GREEN);
-  tft->drawString("INICIAR", SCREEN_W / 2, 182, 4);
+  tft->drawString("INICIAR", SCREEN_W / 2, 203, 2);
 
-  // Boton VOLVER (y=212, h=24)
-  tft->fillRoundRect(60, 212, 120, 24, 4, TFT_RED);
+  // Boton VOLVER (y=224, h=14)
+  tft->fillRoundRect(60, 224, 120, 14, 4, TFT_RED);
   tft->setTextColor(COLOR_TEXT, TFT_RED);
-  tft->drawString("VOLVER", SCREEN_W / 2, 224, 2);
+  tft->drawString("VOLVER", SCREEN_W / 2, 231, 1);
 }
 
 void drawWalkingScreen() {
@@ -783,8 +848,8 @@ void drawWalkingResultScreen() {
   char puntBuf[8];
   snprintf(puntBuf, sizeof(puntBuf), "%.0f", walkPuntajeFinal);
   tft->setTextColor(color, COLOR_BG);
-  tft->drawString(puntBuf, SCREEN_W / 2, 55, 7);  // font 7 = grande
-  tft->drawString(label, SCREEN_W / 2, 85, 4);
+  tft->drawString(puntBuf, SCREEN_W / 2, 50, 4);
+  tft->drawString(label, SCREEN_W / 2, 75, 2);
 
   // Nivel info
   char nivBuf[24];
@@ -1217,50 +1282,40 @@ void loop() {
       }
     }
 
-    // 2. Comprobar step counter cada 100ms
-    static unsigned long lastStepCheck = 0;
-    if (now - lastStepCheck >= 100) {
-      lastStepCheck = now;
-      uint32_t currentSteps = bma->getCounter();
+    // 2. Deteccion de pasos segun modo
+    if (walkDeteccionMode == 0) {
+      // Modo AUTO: detectar pico de aceleracion (impacto del paso)
+      // Usamos la ultima magnitud ya calculada en el bloque acelerometro
+      if (walkAccelCount > 0) {
+        int lastIdx = (walkAccelIdx - 1 + WALK_ACCEL_BUF_SIZE) % WALK_ACCEL_BUF_SIZE;
+        float mag = walkAccelSamples[lastIdx];
+        bool debounceOk = (now - walkLastPeakTime) >= WALK_PEAK_DEBOUNCE;
 
-      if (currentSteps > walkStepCountPrev) {
-        // Nuevo paso detectado
-        uint32_t newSteps = currentSteps - walkStepCountPrev;
-        walkStepCountPrev = currentSteps;
-        walkPasosContados += newSteps;
-
-        // Calcular timing entre pasos
-        float tiempoEntrePasos = (float)(now - walkUltimoPaso);
-        walkUltimoPaso = now;
-        walkUltimoTiming = tiempoEntrePasos;
-
-        // Evaluar suavidad y ritmo del paso
-        if (walkPasosContados > 1) {  // ignorar primer paso (no hay timing previo)
-          float accelStdDev = calcAccelStdDev();
-          float puntaje = evaluarPaso(tiempoEntrePasos, accelStdDev);
-          walkUltimoPuntaje = puntaje;
-
-          // Haptic feedback segun calidad del paso
-          if (puntaje >= 60) {
-            drvPlayEffect(7);   // Soft Bump — buen paso
-          } else {
-            drvPlayEffect(12);  // Triple Click — paso brusco/destiempo
-          }
-
-          Serial.printf("[WALK] Paso %d: %.1fs (obj:%.1fs) stdDev:%.0f punt:%.0f\n",
-                        walkPasosContados, tiempoEntrePasos / 1000.0,
-                        walkTiempoObjetivo / 1000.0, accelStdDev, puntaje);
+        if (mag >= WALK_PEAK_THRESHOLD && !walkPeakAbove && debounceOk) {
+          // Flanco ascendente — nuevo paso detectado
+          walkPeakAbove    = true;
+          walkLastPeakTime = now;
+          if (!walkingMedResultado) registrarPaso(now);
+        } else if (mag < WALK_PEAK_THRESHOLD) {
+          walkPeakAbove = false;
         }
+      }
+    }
+    // Modo TAP: los pasos se registran desde el touch handler del ejercicio
 
-        // Reset buffer acelerometro para siguiente paso
-        walkAccelIdx = 0;
-        walkAccelCount = 0;
+    // 3. Guía háptica (solo nivel 1): vibrar cuando toca dar paso
+    if (walkGuiaActiva && now >= walkNextGuiaTime && walkPasosContados < walkPasosObjetivo) {
+      drvPlayEffect(1);  // Strong Click — señal de paso
+      walkNextGuiaTime = now + (unsigned long)walkTiempoObjetivo;
+    }
 
-        // Actualizar guia haptica
-        walkNextGuiaTime = now + (unsigned long)walkTiempoObjetivo;
-
-        // Comprobar si completó todos los pasos
-        if (walkPasosContados >= walkPasosObjetivo) {
+    // 3b. Touch durante ejercicio: PARAR o TAP-paso
+    {
+      int16_t tx, ty;
+      if (watch->getTouch(tx, ty) && (now - lastTouchTime > 400)) {
+        lastTouchTime = now;
+        if (ty >= 218 && ty <= 238 && tx >= 80 && tx <= 160) {
+          // Boton PARAR
           if (walkPasosEvaluados > 0) {
             walkRitmoFinal    = walkSumaRitmo / walkPasosEvaluados;
             walkSuavidadFinal = walkSumaSuavidad / walkPasosEvaluados;
@@ -1269,19 +1324,13 @@ void loop() {
           walkingMedEjercicio = false;
           walkingMedResultado = true;
           drvStop();
-          // Haptic celebracion o cierre
           drvPlayEffect(walkPuntajeFinal >= 70 ? 14 : 4);
           drawWalkingResultScreen();
-          Serial.printf("[WALK] COMPLETO! Puntaje: %.0f (Ritmo:%.0f Suav:%.0f)\n",
-                        walkPuntajeFinal, walkRitmoFinal, walkSuavidadFinal);
+        } else if (walkDeteccionMode == 1) {
+          // Modo TAP: cualquier toque fuera de PARAR = nuevo paso
+          registrarPaso(now);
         }
       }
-    }
-
-    // 3. Guía háptica (solo nivel 1): vibrar cuando toca dar paso
-    if (walkGuiaActiva && now >= walkNextGuiaTime && walkPasosContados < walkPasosObjetivo) {
-      drvPlayEffect(1);  // Strong Click — señal de paso
-      walkNextGuiaTime = now + (unsigned long)walkTiempoObjetivo;
     }
 
     // 4. Actualizar pantalla cada 300ms
@@ -1311,29 +1360,21 @@ void loop() {
             else if (tx >= 76 && tx <= 142) { walkNivel = 2; drawWalkingSelScreen(); }
             else if (tx >= 147 && tx <= 213){ walkNivel = 3; drawWalkingSelScreen(); }
           }
-          // Boton INICIAR (y=165, h=35)
-          else if (ty >= 165 && ty <= 200 && tx >= 30 && tx <= 210) {
+          // Botones AUTO/TAP (y=152, h=26)
+          else if (ty >= 152 && ty <= 178) {
+            if (tx >= 20 && tx <= 110)       { walkDeteccionMode = 0; drawWalkingSelScreen(); }
+            else if (tx >= 130 && tx <= 220) { walkDeteccionMode = 1; drawWalkingSelScreen(); }
+          }
+          // Boton INICIAR (y=188, h=30)
+          else if (ty >= 188 && ty <= 218 && tx >= 30 && tx <= 210) {
             iniciarWalkingExercise();
           }
-          // Boton VOLVER (y=212, h=24)
-          else if (ty >= 212 && ty <= 236 && tx >= 60 && tx <= 180) {
+          // Boton VOLVER (y=224, h=14)
+          else if (ty >= 224 && ty <= 238 && tx >= 60 && tx <= 180) {
             finalizarWalkingMed();
           }
         } else if (walkingMedEjercicio) {
-          // Boton PARAR (y=218, h=20)
-          if (ty >= 218 && ty <= 238 && tx >= 80 && tx <= 160) {
-            // Calcular puntajes finales
-            if (walkPasosEvaluados > 0) {
-              walkRitmoFinal    = walkSumaRitmo / walkPasosEvaluados;
-              walkSuavidadFinal = walkSumaSuavidad / walkPasosEvaluados;
-              walkPuntajeFinal  = (walkRitmoFinal * 0.5) + (walkSuavidadFinal * 0.5);
-            }
-            walkingMedEjercicio = false;
-            walkingMedResultado = true;
-            drvStop();
-            drvPlayEffect(walkPuntajeFinal >= 70 ? 14 : 4);
-            drawWalkingResultScreen();
-          }
+          // Touch durante ejercicio manejado en el bloque loop de ejercicio (return temprano)
         } else if (walkingMedResultado) {
           // Boton REPETIR (y=195, h=26, x=20-115)
           if (ty >= 195 && ty <= 221 && tx >= 20 && tx <= 115) {
