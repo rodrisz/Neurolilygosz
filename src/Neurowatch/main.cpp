@@ -580,7 +580,7 @@ void drawMenuScreen() {
   snprintf(batBuf, sizeof(batBuf), "%d%%", connected ? batPct : 0);
   tft->setTextColor(batColor, COLOR_BG);
   tft->setTextDatum(MC_DATUM);
-  tft->drawString(batBuf, SCREEN_W / 2, 44, 4);
+  tft->drawString(batBuf, SCREEN_W / 2, 36, 4);
 
   // Voltaje y estado de carga
   char voltBuf[32];
@@ -594,44 +594,49 @@ void drawMenuScreen() {
     snprintf(voltBuf, sizeof(voltBuf), "%.0f mV", batVolt);
   }
   tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
-  tft->drawString(voltBuf, SCREEN_W / 2, 70, 1);
+  tft->drawString(voltBuf, SCREEN_W / 2, 58, 1);
 
   // Línea separadora
-  tft->drawFastHLine(10, 82, SCREEN_W - 20, COLOR_TEXT_DIM);
+  tft->drawFastHLine(10, 68, SCREEN_W - 20, COLOR_TEXT_DIM);
 
-  // ── Umbral activo ────────────────────────────────────────
+  // ── Umbral vibracion ──────────────────────────────────────
   char umbBuf[32];
   if (umbralVibracion == 0) snprintf(umbBuf, sizeof(umbBuf), "Vibra: OFF");
   else snprintf(umbBuf, sizeof(umbBuf), "Vibra: >= %d", umbralVibracion);
   tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
-  tft->drawString(umbBuf, SCREEN_W / 2, 93, 2);
+  tft->drawString(umbBuf, SCREEN_W / 2, 78, 2);
 
-  // ── Botones umbral (h=32, compactos) ────────────────────
-  // Botón 70 (y=108)
+  // ── Botones umbral en fila horizontal (y=94, h=28) ────────
+  int btnW = 66, btnH = 28, btnY = 94, gap = 5;
+  int x70 = 5, x80 = x70 + btnW + gap, x90 = x80 + btnW + gap;
+
   uint16_t c70 = (umbralVibracion == 70) ? TFT_GREEN : COLOR_BAR_BG;
-  tft->fillRoundRect(20, 108, 200, 32, 6, c70);
-  tft->drawRoundRect(20, 108, 200, 32, 6, COLOR_TEXT_DIM);
+  tft->fillRoundRect(x70, btnY, btnW, btnH, 6, c70);
+  tft->drawRoundRect(x70, btnY, btnW, btnH, 6, COLOR_TEXT_DIM);
   tft->setTextColor(COLOR_TEXT, c70);
-  tft->drawString("70", SCREEN_W / 2, 124, 4);
+  tft->drawString("70", x70 + btnW / 2, btnY + btnH / 2, 4);
 
-  // Botón 80 (y=146)
   uint16_t c80 = (umbralVibracion == 80) ? TFT_GREEN : COLOR_BAR_BG;
-  tft->fillRoundRect(20, 146, 200, 32, 6, c80);
-  tft->drawRoundRect(20, 146, 200, 32, 6, COLOR_TEXT_DIM);
+  tft->fillRoundRect(x80, btnY, btnW, btnH, 6, c80);
+  tft->drawRoundRect(x80, btnY, btnW, btnH, 6, COLOR_TEXT_DIM);
   tft->setTextColor(COLOR_TEXT, c80);
-  tft->drawString("80", SCREEN_W / 2, 162, 4);
+  tft->drawString("80", x80 + btnW / 2, btnY + btnH / 2, 4);
 
-  // Botón 90 (y=184)
   uint16_t c90 = (umbralVibracion == 90) ? TFT_GREEN : COLOR_BAR_BG;
-  tft->fillRoundRect(20, 184, 200, 32, 6, c90);
-  tft->drawRoundRect(20, 184, 200, 32, 6, COLOR_TEXT_DIM);
+  tft->fillRoundRect(x90, btnY, btnW, btnH, 6, c90);
+  tft->drawRoundRect(x90, btnY, btnW, btnH, 6, COLOR_TEXT_DIM);
   tft->setTextColor(COLOR_TEXT, c90);
-  tft->drawString("90", SCREEN_W / 2, 200, 4);
+  tft->drawString("90", x90 + btnW / 2, btnY + btnH / 2, 4);
 
-  // Botón EXIT (y=222)
-  tft->fillRoundRect(20, 222, 200, 15, 4, TFT_RED);
+  // Línea separadora
+  tft->drawFastHLine(10, 130, SCREEN_W - 20, COLOR_TEXT_DIM);
+
+  // ── Espacio libre y=135 a y=205 para futuros botones ──
+
+  // Botón EXIT (y=210, h=26)
+  tft->fillRoundRect(20, 210, 200, 26, 4, TFT_RED);
   tft->setTextColor(COLOR_TEXT, TFT_RED);
-  tft->drawString("EXIT", SCREEN_W / 2, 229, 1);
+  tft->drawString("EXIT", SCREEN_W / 2, 223, 2);
 }
 
 void drawConnectScreen(const char* status, const char* detail) {
@@ -780,16 +785,11 @@ void loop() {
 
       if (menuActivo) {
         // Touch en pantalla menú (desde inicio)
-        if (ty >= 108 && ty <= 140) {
-          umbralVibracion = (umbralVibracion == 70) ? 0 : 70;
-          drawMenuScreen();
-        } else if (ty >= 146 && ty <= 178) {
-          umbralVibracion = (umbralVibracion == 80) ? 0 : 80;
-          drawMenuScreen();
-        } else if (ty >= 184 && ty <= 216) {
-          umbralVibracion = (umbralVibracion == 90) ? 0 : 90;
-          drawMenuScreen();
-        } else if (ty >= 222 && ty <= 237) {
+        if (ty >= 94 && ty <= 122) {
+          if (tx >= 5 && tx <= 71)        { umbralVibracion = (umbralVibracion == 70) ? 0 : 70; drawMenuScreen(); }
+          else if (tx >= 76 && tx <= 142) { umbralVibracion = (umbralVibracion == 80) ? 0 : 80; drawMenuScreen(); }
+          else if (tx >= 147 && tx <= 213){ umbralVibracion = (umbralVibracion == 90) ? 0 : 90; drawMenuScreen(); }
+        } else if (ty >= 210 && ty <= 236) {
           menuActivo = false;
           drawInicioScreen();
         }
@@ -924,17 +924,12 @@ void loop() {
     lastTouchTime = now;
 
     if (menuActivo) {
-      // Touch en pantalla menú
-      if (ty >= 108 && ty <= 140) {                  // Botón 70
-        umbralVibracion = (umbralVibracion == 70) ? 0 : 70;
-        drawMenuScreen();
-      } else if (ty >= 146 && ty <= 178) {           // Botón 80
-        umbralVibracion = (umbralVibracion == 80) ? 0 : 80;
-        drawMenuScreen();
-      } else if (ty >= 184 && ty <= 216) {           // Botón 90
-        umbralVibracion = (umbralVibracion == 90) ? 0 : 90;
-        drawMenuScreen();
-      } else if (ty >= 222 && ty <= 237) {           // Botón Exit
+      // Touch en pantalla menú — botones 70/80/90 en fila horizontal
+      if (ty >= 94 && ty <= 122) {
+        if (tx >= 5 && tx <= 71)        { umbralVibracion = (umbralVibracion == 70) ? 0 : 70; drawMenuScreen(); }
+        else if (tx >= 76 && tx <= 142) { umbralVibracion = (umbralVibracion == 80) ? 0 : 80; drawMenuScreen(); }
+        else if (tx >= 147 && tx <= 213){ umbralVibracion = (umbralVibracion == 90) ? 0 : 90; drawMenuScreen(); }
+      } else if (ty >= 210 && ty <= 236) {           // Botón Exit
         menuActivo = false;
         lastDisplayUpdate = 0; // forzar redibujado
       }
