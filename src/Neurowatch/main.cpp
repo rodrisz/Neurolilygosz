@@ -149,6 +149,10 @@ bool menuActivo = false;
 int umbralVibracion = 0;         // 0=desactivado, 70, 80 o 90
 unsigned long lastTouchTime = 0; // debounce touch
 
+// ─── PANTALLA INICIO ────────────────────────────────────────────────────
+bool pantallaInicio = true;      // true = mostrar pantalla inicio, false = ya se pulsó Conectar
+bool btIniciado = false;         // true = Bluetooth ya fue inicializado
+
 // ─── ESTADO CONEXIÓN ───────────────────────────────────────────────────────
 bool          btConnected       = false;
 bool          dataReceived      = false;
@@ -386,6 +390,31 @@ uint16_t eSenseColor(uint8_t v) {
   if (v <= 50) return TFT_YELLOW;
   if (v <= 75) return TFT_GREEN;
   return TFT_CYAN;
+}
+
+void drawInicioScreen() {
+  tft->fillScreen(COLOR_BG);
+
+  // Titulo
+  tft->setTextDatum(MC_DATUM);
+  tft->setTextColor(COLOR_ATTENTION, COLOR_BG);
+  tft->drawString("NEURO-CRAWLER", SCREEN_W / 2, 50, 4);
+
+  // Subtitulo
+  tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
+  tft->drawString("MindWave Mobile", SCREEN_W / 2, 85, 2);
+  tft->drawString("Neurofeedback System", SCREEN_W / 2, 105, 2);
+
+  // Boton CONECTAR
+  tft->fillRoundRect(40, 140, 160, 50, 8, TFT_BLUE);
+  tft->drawRoundRect(40, 140, 160, 50, 8, TFT_CYAN);
+  tft->setTextColor(COLOR_TEXT, TFT_BLUE);
+  tft->drawString("CONECTAR", SCREEN_W / 2, 165, 4);
+
+  // Instruccion
+  tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
+  tft->drawString("Enciende MindWave", SCREEN_W / 2, 210, 1);
+  tft->drawString("y pulsa CONECTAR", SCREEN_W / 2, 224, 1);
 }
 
 void drawMainScreen() {
@@ -666,6 +695,16 @@ void setup() {
   drv->selectLibrary(1);
   drv->setMode(DRV2605_MODE_INTTRIG);
 
+  // ── Mostrar pantalla de inicio ──
+  drawInicioScreen();
+  Serial.println("[INFO] Pantalla de inicio. Pulsa CONECTAR para emparejar.");
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  INICIAR BLUETOOTH (se ejecuta al pulsar CONECTAR)
+// ════════════════════════════════════════════════════════════════════════════
+
+void iniciarBluetooth() {
   drawConnectScreen("Iniciando BT...", "Configurando SPP");
 
   // ══════════════════════════════════════════════════════════════════════
@@ -689,7 +728,10 @@ void setup() {
     tft->setTextColor(TFT_RED, COLOR_BG);
     tft->setTextDatum(MC_DATUM);
     tft->drawString("ERROR: BT INIT FALLO", SCREEN_W / 2, 140, 2);
-    while (1) { delay(1000); }
+    delay(3000);
+    drawInicioScreen();
+    pantallaInicio = true;
+    return;
   }
 
   Serial.println("[BT] Bluetooth iniciado como MAESTRO SPP");
@@ -697,11 +739,9 @@ void setup() {
   Serial.printf("[BT] Target: A4:DA:32:6F:EE:BA @ %d baud\n", MINDWAVE_BAUDRATE);
 
   btStatus = "BT Maestro OK";
+  btIniciado = true;
   drawConnectScreen("BT Listo", "Buscando MindWave...");
 
-  // ══════════════════════════════════════════════════════════════════════
-  // INSTRUCCIONES PARA EL USUARIO:
-  // ══════════════════════════════════════════════════════════════════════
   Serial.println("\n[INFO] ─────────────────────────────────────────");
   Serial.println("[INFO] INSTRUCCIONES:");
   Serial.println("[INFO] 1. Enciende el MindWave (switch ON)");
@@ -721,6 +761,23 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
+
+  // ════════════════════════════════════════════════════════════════════════
+  // FASE 0: PANTALLA DE INICIO (espera pulsar CONECTAR)
+  // ════════════════════════════════════════════════════════════════════════
+
+  if (pantallaInicio) {
+    int16_t tx, ty;
+    if (watch->getTouch(tx, ty) && (now - lastTouchTime > 400)) {
+      lastTouchTime = now;
+      // Boton CONECTAR: x:40-200, y:140-190
+      if (tx >= 40 && tx <= 200 && ty >= 140 && ty <= 190) {
+        pantallaInicio = false;
+        iniciarBluetooth();
+      }
+    }
+    return;
+  }
 
   // ════════════════════════════════════════════════════════════════════════
   // FASE 1: CONEXIÓN BLUETOOTH
