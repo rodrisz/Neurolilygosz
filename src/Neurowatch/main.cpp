@@ -225,8 +225,8 @@ struct WalkLevel {
 
 const WalkLevel walkLevels[3] = {
   { "Paseo Consciente", 2500.0, 1000.0, 800, 20, true  },  // Nivel 1
-  { "Camino Interior",  4500.0,  800.0, 500, 30, false },  // Nivel 2
-  { "Maestro Zen",      8000.0, 1500.0, 300, 40, false },  // Nivel 3
+  { "Camino Interior",  4500.0,  800.0, 500, 30, true  },  // Nivel 2
+  { "Maestro Zen",      8000.0, 1500.0, 300, 40, true  },  // Nivel 3
 };
 
 // Forward declarations Walking Med
@@ -1305,7 +1305,7 @@ void loop() {
 
     // 3. Guía háptica (solo nivel 1): vibrar cuando toca dar paso
     if (walkGuiaActiva && now >= walkNextGuiaTime && walkPasosContados < walkPasosObjetivo) {
-      drvPlayEffect(1);  // Strong Click — señal de paso
+      drvPlayEffect(14);  // Buzz 100% — señal de paso (mayor intensidad)
       walkNextGuiaTime = now + (unsigned long)walkTiempoObjetivo;
     }
 

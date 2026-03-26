@@ -32,3 +32,5 @@ Bluetooth: MindWave conecta por SPP a SerialBT, protocolo ThinkGear ASIC.
 Pantalla conexion: muestra NEURO-CRAWLER y estado de conexion BT.
 Panel principal: atencion, meditacion, IFN, RC, bandas EEG, boton Menu.
 Pantalla menu: botones umbral 70/80/90, estado bateria (accesible solo desde panel principal).
+
+Gapaxionsz es un sisitema creado por RodriSZ, con este sistema se busca entrenar los espacios de vacio mental entre pensamiento y pensamiento, utilizando ejercicios de Mindfulness meditacion, respiración, bodymindfulness, meditación en movimiento, cambios de estado variando la tasa de pensamientos en un intervalo de tiempo, Gapaxion se podría decir que es la brecha entre pensamiento y pensamiento en donde podemos realizar una accion, sea accion mental o fisica, movimiento o estrucutra mental de sanacion, como los engranajes de observador. 
