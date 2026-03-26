@@ -1174,7 +1174,8 @@ void setup() {
   tft->setRotation(2);
   tft->fillScreen(COLOR_BG);
   tft->setSwapBytes(true);
-  watch->setBrightness(180);
+  //watch->setBrightness(180);
+  watch->setBrightness(100);
 
   // ── Inicializar motor vibración (DRV2605L via I2C) ──
   watch->enableDrv2650();       // AXP202 GPIO0 alimenta el DRV2605L
