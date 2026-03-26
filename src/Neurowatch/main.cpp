@@ -53,6 +53,8 @@
 //hola prueba git
 #include <LilyGoWatch.h>
 #include "BluetoothSerial.h"
+#include <SD.h>
+#include <FS.h>
 
 // ─── VERIFICACIÓN BT CLÁSICO ───────────────────────────────────────────────
 #if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
@@ -167,6 +169,14 @@ unsigned long connectAttemptTime= 0;
 int           connectAttempts   = 0;
 uint32_t      totalPackets      = 0;
 uint32_t      badChecksums      = 0;
+
+// ─── SD CARD & LOGGING ───────────────────────────────────────────────────
+bool sdReady          = false;     // SD card inicializada correctamente
+bool sdLogging        = false;     // sesion activa grabando datos
+uint16_t sesionNumero = 0;         // numero de sesion actual
+File archivoSesion;                // archivo abierto de la sesion actual
+unsigned long lastSDWrite = 0;     // debounce escritura SD
+#define SD_WRITE_INTERVAL 1000     // escribir cada 1 segundo
 
 // ─── WALKING MEDITATION (Mindful Steps) ──────────────────────────────────
 bool walkingMedActivo    = false;   // modo walking meditation activo
@@ -497,7 +507,88 @@ void drawInicioScreen() {
   tft->drawString("y Enciende MindWave", SCREEN_W / 2, 224, 1);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  SD CARD - Funciones de logging
+// ════════════════════════════════════════════════════════════════════════════
+
+// Lee el numero de sesion guardado en /sesion.txt, lo incrementa y lo guarda
+uint16_t leerYActualizarSesion() {
+  uint16_t num = 0;
+  if (SD.exists("/sesion.txt")) {
+    File f = SD.open("/sesion.txt", FILE_READ);
+    if (f) {
+      String s = f.readStringUntil('\n');
+      num = (uint16_t)s.toInt();
+      f.close();
+    }
+  }
+  num++;
+  File f = SD.open("/sesion.txt", FILE_WRITE);
+  if (f) {
+    f.println(num);
+    f.close();
+  }
+  return num;
+}
+
+// Inicia una nueva sesion: crea archivo CSV con encabezado
+void iniciarLogSD() {
+  if (!sdReady) return;
+
+  sesionNumero = leerYActualizarSesion();
+
+  // Obtener fecha/hora del RTC para el nombre del archivo
+  RTC_Date dt = watch->rtc->getDateTime();
+  char filename[40];
+  snprintf(filename, sizeof(filename), "/sesion_%03d.csv", sesionNumero);
+
+  archivoSesion = SD.open(filename, FILE_WRITE);
+  if (!archivoSesion) {
+    Serial.printf("[SD] Error abriendo %s\n", filename);
+    sdLogging = false;
+    return;
+  }
+
+  // Escribir encabezado
+  archivoSesion.println("Sesion,Fecha,Hora,Attention,Meditation,PoorSignal,IFN,RC,Delta,Theta,LowAlpha,HighAlpha,LowBeta,HighBeta,LowGamma,MidGamma");
+  archivoSesion.flush();
+
+  sdLogging = true;
+  lastSDWrite = millis();
+  Serial.printf("[SD] Sesion #%d iniciada -> %s\n", sesionNumero, filename);
+}
+
+// Escribe una linea de datos en el CSV
+void escribirLineaSD() {
+  if (!sdLogging || !archivoSesion) return;
+
+  RTC_Date dt = watch->rtc->getDateTime();
+  char linea[200];
+  snprintf(linea, sizeof(linea),
+    "%d,%04d-%02d-%02d,%02d:%02d:%02d,%d,%d,%d,%.2f,%.2f,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu",
+    sesionNumero,
+    dt.year, dt.month, dt.day,
+    dt.hour, dt.minute, dt.second,
+    attention, meditation, poorSignal,
+    indiceFatiga, ratioCarga,
+    eegDelta, eegTheta, eegLowAlpha, eegHighAlpha,
+    eegLowBeta, eegHighBeta, eegLowGamma, eegMidGamma
+  );
+  archivoSesion.println(linea);
+  archivoSesion.flush();
+}
+
+// Cierra el archivo de sesion
+void cerrarLogSD() {
+  if (sdLogging && archivoSesion) {
+    archivoSesion.close();
+    Serial.printf("[SD] Sesion #%d cerrada\n", sesionNumero);
+  }
+  sdLogging = false;
+}
+
 void finalizarSesion() {
+  cerrarLogSD();
   drvStop();
   if (btIniciado) {
     SerialBT.disconnect();
@@ -1197,6 +1288,26 @@ void setup() {
   bma->resetStepCounter();
   Serial.println("[BMA] Acelerometro + Step Counter inicializados");
 
+  // ── Inicializar SD Card ──
+  if (watch->sdcard_begin()) {
+    sdReady = true;
+    Serial.println("[SD] SD Card inicializada correctamente");
+    uint8_t cardType = SD.cardType();
+    if (cardType == CARD_NONE) {
+      Serial.println("[SD] No se detecto tarjeta SD");
+      sdReady = false;
+    } else {
+      Serial.printf("[SD] Tipo: %s, Tamano: %llu MB\n",
+        (cardType == CARD_MMC) ? "MMC" :
+        (cardType == CARD_SD)  ? "SDSC" :
+        (cardType == CARD_SDHC)? "SDHC" : "UNKNOWN",
+        SD.cardSize() / (1024 * 1024));
+    }
+  } else {
+    sdReady = false;
+    Serial.println("[SD] Error: No se pudo inicializar SD Card");
+  }
+
   // ── Mostrar pantalla de inicio ──
   drawInicioScreen();
   Serial.println("[INFO] Pantalla de inicio. Pulsa CONECTAR para emparejar.");
@@ -1479,6 +1590,9 @@ void loop() {
         totalPackets   = 0;
         badChecksums   = 0;
 
+        // Iniciar logging en SD
+        iniciarLogSD();
+
       } else {
         Serial.println("[BT] connect() retorno FALSE");
         Serial.println("[BT] Verifica:");
@@ -1580,6 +1694,12 @@ void loop() {
       Serial.printf("[EEG] d:%lu t:%lu lA:%lu hA:%lu lB:%lu hB:%lu lG:%lu mG:%lu\n",
                     eegDelta, eegTheta, eegLowAlpha, eegHighAlpha,
                     eegLowBeta, eegHighBeta, eegLowGamma, eegMidGamma);
+    }
+
+    // Grabar datos en SD Card
+    if (sdLogging && (now - lastSDWrite >= SD_WRITE_INTERVAL)) {
+      lastSDWrite = now;
+      escribirLineaSD();
     }
   }
 
