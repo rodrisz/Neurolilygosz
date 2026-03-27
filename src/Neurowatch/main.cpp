@@ -184,8 +184,14 @@ bool pantallaUsuario   = true;     // true = mostrar pantalla seleccion usuario
 const char *usuarioNombres[3]  = { "Rodrigo", "Julieth", "Ambos" };
 const char *usuarioCarpetas[3] = { "/rodrigo", "/julieth", "/ambos" };
 
-// Forward declaration
+// ─── SELECCION DE EJERCICIO GAPAXION ─────────────────────────────────────
+int  gapaxionActual      = -1;     // -1=no seleccionado, 0..9 = G1..G10
+bool pantallaGapaxion    = false;  // true = mostrar pantalla seleccion ejercicio
+const char *gapaxionNombres[10] = { "G1","G2","G3","G4","G5","G6","G7","G8","G9","G10" };
+
+// Forward declarations
 void drawUserSelectScreen();
+void drawGapaxionSelectScreen();
 
 // ─── WALKING MEDITATION (Mindful Steps) ──────────────────────────────────
 bool walkingMedActivo    = false;   // modo walking meditation activo
@@ -520,6 +526,69 @@ void drawUserSelectScreen() {
   tft->drawString("Ambos", SCREEN_W / 2, 210, 4);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  PANTALLA SELECCION DE EJERCICIO GAPAXION
+// ════════════════════════════════════════════════════════════════════════════
+
+void drawGapaxionSelectScreen() {
+  tft->fillScreen(COLOR_BG);
+
+  // Titulo
+  tft->setTextDatum(MC_DATUM);
+  tft->setTextColor(COLOR_ATTENTION, COLOR_BG);
+  tft->drawString("GAPAXIONSZ", SCREEN_W / 2, 14, 2);
+
+  // Subtitulo con nombre de usuario
+  tft->setTextColor(TFT_CYAN, COLOR_BG);
+  if (usuarioActual >= 0) {
+    tft->drawString(usuarioNombres[usuarioActual], SCREEN_W / 2, 32, 2);
+  }
+  tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
+  tft->drawString("Selecciona Ejercicio", SCREEN_W / 2, 50, 2);
+
+  // 10 botones en grid 5x2: G1-G5 (fila 1), G6-G10 (fila 2)
+  // Cada boton: 42x32, gap 4px
+  int btnW = 42, btnH = 32, gap = 4;
+  int startX = 7;  // (240 - 5*42 - 4*4) / 2 = 7
+  int y1 = 68, y2 = 108;
+
+  for (int i = 0; i < 10; i++) {
+    int col = i % 5;
+    int row = i / 5;
+    int bx = startX + col * (btnW + gap);
+    int by = (row == 0) ? y1 : y2;
+
+    uint16_t bgColor = (i == gapaxionActual) ? TFT_GREEN : TFT_BLUE;
+    uint16_t borderColor = (i == gapaxionActual) ? TFT_WHITE : TFT_CYAN;
+
+    tft->fillRoundRect(bx, by, btnW, btnH, 6, bgColor);
+    tft->drawRoundRect(bx, by, btnW, btnH, 6, borderColor);
+    tft->setTextColor(COLOR_TEXT, bgColor);
+    tft->drawString(gapaxionNombres[i], bx + btnW / 2, by + btnH / 2, 2);
+  }
+
+  // Info del gapaxion seleccionado
+  if (gapaxionActual >= 0) {
+    tft->setTextColor(TFT_GREEN, COLOR_BG);
+    char sel[20];
+    snprintf(sel, sizeof(sel), "Ejercicio: %s", gapaxionNombres[gapaxionActual]);
+    tft->drawString(sel, SCREEN_W / 2, 152, 2);
+  }
+
+  // Boton CONTINUAR (solo visible si hay gapaxion seleccionado)
+  if (gapaxionActual >= 0) {
+    tft->fillRoundRect(40, 170, 160, 36, 8, TFT_GREEN);
+    tft->drawRoundRect(40, 170, 160, 36, 8, TFT_WHITE);
+    tft->setTextColor(COLOR_BG, TFT_GREEN);
+    tft->drawString("CONTINUAR", SCREEN_W / 2, 188, 4);
+  }
+
+  // Boton VOLVER (esquina inferior)
+  tft->fillRoundRect(70, 216, 100, 22, 4, TFT_RED);
+  tft->setTextColor(COLOR_TEXT, TFT_RED);
+  tft->drawString("VOLVER", SCREEN_W / 2, 227, 2);
+}
+
 void drawInicioScreen() {
   tft->fillScreen(COLOR_BG);
 
@@ -528,9 +597,13 @@ void drawInicioScreen() {
   tft->setTextColor(COLOR_ATTENTION, COLOR_BG);
   tft->drawString("GAPAXIONSZ", SCREEN_W / 2, 50, 4);
 
-  // Subtitulo — nombre del usuario seleccionado
+  // Subtitulo — nombre del usuario y ejercicio seleccionado
   tft->setTextColor(TFT_CYAN, COLOR_BG);
-  if (usuarioActual >= 0) {
+  if (usuarioActual >= 0 && gapaxionActual >= 0) {
+    char subtitulo[30];
+    snprintf(subtitulo, sizeof(subtitulo), "%s - %s", usuarioNombres[usuarioActual], gapaxionNombres[gapaxionActual]);
+    tft->drawString(subtitulo, SCREEN_W / 2, 85, 2);
+  } else if (usuarioActual >= 0) {
     tft->drawString(usuarioNombres[usuarioActual], SCREEN_W / 2, 85, 2);
   }
   tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
@@ -564,19 +637,28 @@ void drawInicioScreen() {
 //  SD CARD - Funciones de logging
 // ════════════════════════════════════════════════════════════════════════════
 
-// Lee el numero de sesion guardado en /{usuario}/sesion.txt, lo incrementa y lo guarda
+// Lee el numero de sesion guardado en /{usuario}/{gapaxion}/sesion.txt, lo incrementa y lo guarda
 uint16_t leerYActualizarSesion() {
-  if (usuarioActual < 0) return 0;
-  const char *carpeta = usuarioCarpetas[usuarioActual];
+  if (usuarioActual < 0 || gapaxionActual < 0) return 0;
+  const char *carpetaUsr = usuarioCarpetas[usuarioActual];
+  const char *carpetaGap = gapaxionNombres[gapaxionActual];
 
   // Crear carpeta del usuario si no existe
-  if (!SD.exists(carpeta)) {
-    SD.mkdir(carpeta);
-    Serial.printf("[SD] Carpeta creada: %s\n", carpeta);
+  if (!SD.exists(carpetaUsr)) {
+    SD.mkdir(carpetaUsr);
+    Serial.printf("[SD] Carpeta usuario creada: %s\n", carpetaUsr);
   }
 
-  char ruta[40];
-  snprintf(ruta, sizeof(ruta), "%s/sesion.txt", carpeta);
+  // Crear subcarpeta del gapaxion si no existe
+  char carpetaFull[40];
+  snprintf(carpetaFull, sizeof(carpetaFull), "%s/%s", carpetaUsr, carpetaGap);
+  if (!SD.exists(carpetaFull)) {
+    SD.mkdir(carpetaFull);
+    Serial.printf("[SD] Carpeta gapaxion creada: %s\n", carpetaFull);
+  }
+
+  char ruta[60];
+  snprintf(ruta, sizeof(ruta), "%s/%s/sesion.txt", carpetaUsr, carpetaGap);
 
   uint16_t num = 0;
   if (SD.exists(ruta)) {
@@ -596,15 +678,15 @@ uint16_t leerYActualizarSesion() {
   return num;
 }
 
-// Inicia una nueva sesion: crea archivo CSV con encabezado en carpeta del usuario
+// Inicia una nueva sesion: crea archivo CSV en /{usuario}/{gapaxion}/
 void iniciarLogSD() {
-  if (!sdReady || usuarioActual < 0) return;
+  if (!sdReady || usuarioActual < 0 || gapaxionActual < 0) return;
 
   sesionNumero = leerYActualizarSesion();
 
-  char filename[60];
-  snprintf(filename, sizeof(filename), "%s/sesion_%03d.csv",
-           usuarioCarpetas[usuarioActual], sesionNumero);
+  char filename[80];
+  snprintf(filename, sizeof(filename), "%s/%s/sesion_%03d.csv",
+           usuarioCarpetas[usuarioActual], gapaxionNombres[gapaxionActual], sesionNumero);
 
   archivoSesion = SD.open(filename, FILE_WRITE);
   if (!archivoSesion) {
@@ -619,8 +701,8 @@ void iniciarLogSD() {
 
   sdLogging = true;
   lastSDWrite = millis();
-  Serial.printf("[SD] Sesion #%d [%s] iniciada -> %s\n",
-                sesionNumero, usuarioNombres[usuarioActual], filename);
+  Serial.printf("[SD] Sesion #%d [%s/%s] iniciada -> %s\n",
+                sesionNumero, usuarioNombres[usuarioActual], gapaxionNombres[gapaxionActual], filename);
 }
 
 // Escribe una linea de datos en el CSV
@@ -667,8 +749,10 @@ void finalizarSesion() {
   badChecksums = 0;
   menuActivo = false;
   pantallaInicio = false;
+  pantallaGapaxion = false;
   pantallaUsuario = true;
   usuarioActual = -1;
+  gapaxionActual = -1;
   drawUserSelectScreen();
 }
 
@@ -1545,9 +1629,65 @@ void loop() {
 
       if (usuarioActual >= 0) {
         pantallaUsuario = false;
-        pantallaInicio = true;
+        pantallaGapaxion = true;
+        gapaxionActual = -1;
         Serial.printf("[INFO] Usuario: %s\n", usuarioNombres[usuarioActual]);
+        drawGapaxionSelectScreen();
+      }
+    }
+    return;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // FASE -0.5: SELECCION DE EJERCICIO GAPAXION
+  // ════════════════════════════════════════════════════════════════════════
+
+  if (pantallaGapaxion) {
+    int16_t tx, ty;
+    if (watch->getTouch(tx, ty) && (now - lastTouchTime > 400)) {
+      lastTouchTime = now;
+
+      // Grid de botones G1-G10 (5x2)
+      int btnW = 42, btnH = 32, gap = 4;
+      int startX = 7;
+      int y1 = 68, y2 = 108;
+
+      // Detectar toque en botones G1-G5 (fila 1)
+      if (ty >= y1 && ty <= y1 + btnH) {
+        for (int i = 0; i < 5; i++) {
+          int bx = startX + i * (btnW + gap);
+          if (tx >= bx && tx <= bx + btnW) {
+            gapaxionActual = i;
+            drawGapaxionSelectScreen();
+            break;
+          }
+        }
+      }
+      // Detectar toque en botones G6-G10 (fila 2)
+      else if (ty >= y2 && ty <= y2 + btnH) {
+        for (int i = 0; i < 5; i++) {
+          int bx = startX + i * (btnW + gap);
+          if (tx >= bx && tx <= bx + btnW) {
+            gapaxionActual = 5 + i;
+            drawGapaxionSelectScreen();
+            break;
+          }
+        }
+      }
+      // Boton CONTINUAR (y:170, h:36) — solo si hay gapaxion seleccionado
+      else if (gapaxionActual >= 0 && ty >= 170 && ty <= 206 && tx >= 40 && tx <= 200) {
+        pantallaGapaxion = false;
+        pantallaInicio = true;
+        Serial.printf("[INFO] Ejercicio: %s\n", gapaxionNombres[gapaxionActual]);
         drawInicioScreen();
+      }
+      // Boton VOLVER (y:216, h:22)
+      else if (ty >= 216 && ty <= 238 && tx >= 70 && tx <= 170) {
+        pantallaGapaxion = false;
+        pantallaUsuario = true;
+        usuarioActual = -1;
+        gapaxionActual = -1;
+        drawUserSelectScreen();
       }
     }
     return;
@@ -1616,12 +1756,12 @@ void loop() {
           drawInicioScreen();
         }
       } else {
-        // Boton USER: x:1-59, y:1-27
+        // Boton USER: x:1-59, y:1-27 — vuelve a seleccion de gapaxion
         if (tx >= 1 && tx <= 59 && ty >= 1 && ty <= 27) {
           pantallaInicio = false;
-          pantallaUsuario = true;
-          usuarioActual = -1;
-          drawUserSelectScreen();
+          pantallaGapaxion = true;
+          gapaxionActual = -1;
+          drawGapaxionSelectScreen();
         }
         // Boton MENU: x:180-238, y:1-27
         else if (tx >= 180 && tx <= 238 && ty >= 1 && ty <= 27) {
