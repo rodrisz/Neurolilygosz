@@ -157,7 +157,7 @@ int umbralVibracion = 0;         // 0=desactivado, 70, 80 o 90
 unsigned long lastTouchTime = 0; // debounce touch
 
 // ─── PANTALLA INICIO ────────────────────────────────────────────────────
-bool pantallaInicio = true;      // true = mostrar pantalla inicio, false = ya se pulsó Conectar
+bool pantallaInicio = false;     // true = mostrar pantalla inicio, false = ya se pulsó Conectar
 bool btIniciado = false;         // true = Bluetooth ya fue inicializado
 
 // ─── ESTADO CONEXIÓN ───────────────────────────────────────────────────────
@@ -177,6 +177,15 @@ uint16_t sesionNumero = 0;         // numero de sesion actual
 File archivoSesion;                // archivo abierto de la sesion actual
 unsigned long lastSDWrite = 0;     // debounce escritura SD
 #define SD_WRITE_INTERVAL 1000     // escribir cada 1 segundo
+
+// ─── SELECCION DE USUARIO ────────────────────────────────────────────────
+int  usuarioActual     = -1;       // -1=no seleccionado, 0=Rodrigo, 1=Julieth, 2=Ambos
+bool pantallaUsuario   = true;     // true = mostrar pantalla seleccion usuario
+const char *usuarioNombres[3]  = { "Rodrigo", "Julieth", "Ambos" };
+const char *usuarioCarpetas[3] = { "/rodrigo", "/julieth", "/ambos" };
+
+// Forward declaration
+void drawUserSelectScreen();
 
 // ─── WALKING MEDITATION (Mindful Steps) ──────────────────────────────────
 bool walkingMedActivo    = false;   // modo walking meditation activo
@@ -476,6 +485,41 @@ uint16_t eSenseColor(uint8_t v) {
   return TFT_CYAN;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  PANTALLA SELECCION DE USUARIO
+// ════════════════════════════════════════════════════════════════════════════
+
+void drawUserSelectScreen() {
+  tft->fillScreen(COLOR_BG);
+
+  // Titulo
+  tft->setTextDatum(MC_DATUM);
+  tft->setTextColor(COLOR_ATTENTION, COLOR_BG);
+  tft->drawString("GAPAXIONSZ", SCREEN_W / 2, 30, 4);
+
+  // Subtitulo
+  tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
+  tft->drawString("Selecciona Usuario", SCREEN_W / 2, 65, 2);
+
+  // Boton Rodrigo (y:90, h:40)
+  tft->fillRoundRect(30, 90, 180, 40, 8, TFT_BLUE);
+  tft->drawRoundRect(30, 90, 180, 40, 8, TFT_CYAN);
+  tft->setTextColor(COLOR_TEXT, TFT_BLUE);
+  tft->drawString("Rodrigo", SCREEN_W / 2, 110, 4);
+
+  // Boton Julieth (y:140, h:40)
+  tft->fillRoundRect(30, 140, 180, 40, 8, 0x600C);
+  tft->drawRoundRect(30, 140, 180, 40, 8, 0xF81F);
+  tft->setTextColor(COLOR_TEXT, 0x600C);
+  tft->drawString("Julieth", SCREEN_W / 2, 160, 4);
+
+  // Boton Ambos (y:190, h:40)
+  tft->fillRoundRect(30, 190, 180, 40, 8, 0x0320);
+  tft->drawRoundRect(30, 190, 180, 40, 8, TFT_GREEN);
+  tft->setTextColor(COLOR_TEXT, 0x0320);
+  tft->drawString("Ambos", SCREEN_W / 2, 210, 4);
+}
+
 void drawInicioScreen() {
   tft->fillScreen(COLOR_BG);
 
@@ -484,9 +528,12 @@ void drawInicioScreen() {
   tft->setTextColor(COLOR_ATTENTION, COLOR_BG);
   tft->drawString("GAPAXIONSZ", SCREEN_W / 2, 50, 4);
 
-  // Subtitulo
+  // Subtitulo — nombre del usuario seleccionado
+  tft->setTextColor(TFT_CYAN, COLOR_BG);
+  if (usuarioActual >= 0) {
+    tft->drawString(usuarioNombres[usuarioActual], SCREEN_W / 2, 85, 2);
+  }
   tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
-  tft->drawString("RodriSZ", SCREEN_W / 2, 85, 2);
   tft->drawString("Neurofeedback Entrenamiento", SCREEN_W / 2, 105, 2);
 
   // Boton CONECTAR
@@ -494,6 +541,12 @@ void drawInicioScreen() {
   tft->drawRoundRect(40, 140, 160, 50, 8, TFT_CYAN);
   tft->setTextColor(COLOR_TEXT, TFT_BLUE);
   tft->drawString("CONECTAR", SCREEN_W / 2, 165, 4);
+
+  // ── BOTÓN USUARIO (esquina superior izquierda) ──
+  tft->fillRoundRect(1, 1, 58, 26, 4, 0x0320);
+  tft->setTextColor(COLOR_TEXT, 0x0320);
+  tft->setTextDatum(MC_DATUM);
+  tft->drawString("User", 30, 14, 2);
 
   // ── BOTÓN MENU (esquina superior derecha) ──
   tft->fillRoundRect(180, 1, 58, 26, 4, TFT_BLUE);
@@ -511,11 +564,23 @@ void drawInicioScreen() {
 //  SD CARD - Funciones de logging
 // ════════════════════════════════════════════════════════════════════════════
 
-// Lee el numero de sesion guardado en /sesion.txt, lo incrementa y lo guarda
+// Lee el numero de sesion guardado en /{usuario}/sesion.txt, lo incrementa y lo guarda
 uint16_t leerYActualizarSesion() {
+  if (usuarioActual < 0) return 0;
+  const char *carpeta = usuarioCarpetas[usuarioActual];
+
+  // Crear carpeta del usuario si no existe
+  if (!SD.exists(carpeta)) {
+    SD.mkdir(carpeta);
+    Serial.printf("[SD] Carpeta creada: %s\n", carpeta);
+  }
+
+  char ruta[40];
+  snprintf(ruta, sizeof(ruta), "%s/sesion.txt", carpeta);
+
   uint16_t num = 0;
-  if (SD.exists("/sesion.txt")) {
-    File f = SD.open("/sesion.txt", FILE_READ);
+  if (SD.exists(ruta)) {
+    File f = SD.open(ruta, FILE_READ);
     if (f) {
       String s = f.readStringUntil('\n');
       num = (uint16_t)s.toInt();
@@ -523,7 +588,7 @@ uint16_t leerYActualizarSesion() {
     }
   }
   num++;
-  File f = SD.open("/sesion.txt", FILE_WRITE);
+  File f = SD.open(ruta, FILE_WRITE);
   if (f) {
     f.println(num);
     f.close();
@@ -531,16 +596,15 @@ uint16_t leerYActualizarSesion() {
   return num;
 }
 
-// Inicia una nueva sesion: crea archivo CSV con encabezado
+// Inicia una nueva sesion: crea archivo CSV con encabezado en carpeta del usuario
 void iniciarLogSD() {
-  if (!sdReady) return;
+  if (!sdReady || usuarioActual < 0) return;
 
   sesionNumero = leerYActualizarSesion();
 
-  // Obtener fecha/hora del RTC para el nombre del archivo
-  RTC_Date dt = watch->rtc->getDateTime();
-  char filename[40];
-  snprintf(filename, sizeof(filename), "/sesion_%03d.csv", sesionNumero);
+  char filename[60];
+  snprintf(filename, sizeof(filename), "%s/sesion_%03d.csv",
+           usuarioCarpetas[usuarioActual], sesionNumero);
 
   archivoSesion = SD.open(filename, FILE_WRITE);
   if (!archivoSesion) {
@@ -555,7 +619,8 @@ void iniciarLogSD() {
 
   sdLogging = true;
   lastSDWrite = millis();
-  Serial.printf("[SD] Sesion #%d iniciada -> %s\n", sesionNumero, filename);
+  Serial.printf("[SD] Sesion #%d [%s] iniciada -> %s\n",
+                sesionNumero, usuarioNombres[usuarioActual], filename);
 }
 
 // Escribe una linea de datos en el CSV
@@ -601,8 +666,10 @@ void finalizarSesion() {
   totalPackets = 0;
   badChecksums = 0;
   menuActivo = false;
-  pantallaInicio = true;
-  drawInicioScreen();
+  pantallaInicio = false;
+  pantallaUsuario = true;
+  usuarioActual = -1;
+  drawUserSelectScreen();
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1308,9 +1375,10 @@ void setup() {
     Serial.println("[SD] Error: No se pudo inicializar SD Card");
   }
 
-  // ── Mostrar pantalla de inicio ──
-  drawInicioScreen();
-  Serial.println("[INFO] Pantalla de inicio. Pulsa CONECTAR para emparejar.");
+  // ── Mostrar pantalla de seleccion de usuario ──
+  pantallaUsuario = true;
+  drawUserSelectScreen();
+  Serial.println("[INFO] Selecciona usuario para continuar.");
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1455,6 +1523,37 @@ void loop() {
   }
 
   // ════════════════════════════════════════════════════════════════════════
+  // FASE -1: SELECCION DE USUARIO
+  // ════════════════════════════════════════════════════════════════════════
+
+  if (pantallaUsuario) {
+    int16_t tx, ty;
+    if (watch->getTouch(tx, ty) && (now - lastTouchTime > 400)) {
+      lastTouchTime = now;
+      // Boton Rodrigo: x:30-210, y:90-130
+      if (tx >= 30 && tx <= 210 && ty >= 90 && ty <= 130) {
+        usuarioActual = 0;
+      }
+      // Boton Julieth: x:30-210, y:140-180
+      else if (tx >= 30 && tx <= 210 && ty >= 140 && ty <= 180) {
+        usuarioActual = 1;
+      }
+      // Boton Ambos: x:30-210, y:190-230
+      else if (tx >= 30 && tx <= 210 && ty >= 190 && ty <= 230) {
+        usuarioActual = 2;
+      }
+
+      if (usuarioActual >= 0) {
+        pantallaUsuario = false;
+        pantallaInicio = true;
+        Serial.printf("[INFO] Usuario: %s\n", usuarioNombres[usuarioActual]);
+        drawInicioScreen();
+      }
+    }
+    return;
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
   // FASE 0: PANTALLA DE INICIO (espera pulsar CONECTAR)
   // ════════════════════════════════════════════════════════════════════════
 
@@ -1517,8 +1616,15 @@ void loop() {
           drawInicioScreen();
         }
       } else {
+        // Boton USER: x:1-59, y:1-27
+        if (tx >= 1 && tx <= 59 && ty >= 1 && ty <= 27) {
+          pantallaInicio = false;
+          pantallaUsuario = true;
+          usuarioActual = -1;
+          drawUserSelectScreen();
+        }
         // Boton MENU: x:180-238, y:1-27
-        if (tx >= 180 && tx <= 238 && ty >= 1 && ty <= 27) {
+        else if (tx >= 180 && tx <= 238 && ty >= 1 && ty <= 27) {
           menuActivo = true;
           drawMenuScreen();
         }
