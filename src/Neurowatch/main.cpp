@@ -189,9 +189,16 @@ int  gapaxionActual      = -1;     // -1=no seleccionado, 0..9 = G1..G10
 bool pantallaGapaxion    = false;  // true = mostrar pantalla seleccion ejercicio
 const char *gapaxionNombres[10] = { "G1","G2","G3","G4","G5","G6","G7","G8","G9","G10" };
 
+// ─── CONFIGURACION RELOJ (FECHA/HORA) ───────────────────────────────────
+bool pantallaReloj       = false;  // true = mostrar pantalla config reloj
+int  relojCampos[6]      = {0,0,0,0,0,0};  // año,mes,dia,hora,min,seg
+int  relojCampoSel       = 0;     // campo seleccionado (0-5)
+const char *relojLabels[6] = { "Ano", "Mes", "Dia", "Hora", "Min", "Seg" };
+
 // Forward declarations
 void drawUserSelectScreen();
 void drawGapaxionSelectScreen();
+void drawRelojScreen();
 
 // ─── WALKING MEDITATION (Mindful Steps) ──────────────────────────────────
 bool walkingMedActivo    = false;   // modo walking meditation activo
@@ -589,6 +596,85 @@ void drawGapaxionSelectScreen() {
   tft->drawString("VOLVER", SCREEN_W / 2, 227, 2);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  PANTALLA CONFIGURACION RELOJ (FECHA/HORA)
+// ════════════════════════════════════════════════════════════════════════════
+
+void drawRelojScreen() {
+  tft->fillScreen(COLOR_BG);
+
+  // Header
+  tft->fillRoundRect(0, 0, SCREEN_W, 28, 0, COLOR_HEADER);
+  tft->setTextColor(TFT_YELLOW, COLOR_HEADER);
+  tft->setTextDatum(MC_DATUM);
+  tft->drawString("AJUSTAR RELOJ", SCREEN_W / 2, 14, 2);
+
+  // Fecha/hora actual del RTC
+  RTC_Date dt = watch->rtc->getDateTime();
+  char actualBuf[24];
+  snprintf(actualBuf, sizeof(actualBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+           dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+  tft->setTextColor(COLOR_TEXT_DIM, COLOR_BG);
+  tft->drawString(actualBuf, SCREEN_W / 2, 40, 1);
+
+  // 6 columnas: Ano Mes Dia Hora Min Seg
+  // Cada columna: label + valor + boton[+] + boton[-]
+  int colW = 38, gap = 2;
+  int startX = (SCREEN_W - 6 * colW - 5 * gap) / 2;  // centrado
+
+  for (int i = 0; i < 6; i++) {
+    int cx = startX + i * (colW + gap) + colW / 2;
+    int bx = startX + i * (colW + gap);
+
+    // Label
+    uint16_t labelColor = (i == relojCampoSel) ? TFT_YELLOW : COLOR_TEXT_DIM;
+    tft->setTextColor(labelColor, COLOR_BG);
+    tft->drawString(relojLabels[i], cx, 58, 1);
+
+    // Boton [+] (y=68, h=28)
+    uint16_t btnColor = (i == relojCampoSel) ? TFT_CYAN : COLOR_BAR_BG;
+    tft->fillRoundRect(bx, 68, colW, 28, 4, btnColor);
+    tft->setTextColor(COLOR_TEXT, btnColor);
+    tft->drawString("+", cx, 82, 2);
+
+    // Valor (y=102)
+    char valBuf[6];
+    if (i == 0) snprintf(valBuf, sizeof(valBuf), "%04d", relojCampos[i]);
+    else        snprintf(valBuf, sizeof(valBuf), "%02d", relojCampos[i]);
+
+    uint16_t valColor = (i == relojCampoSel) ? TFT_GREEN : COLOR_TEXT;
+    tft->setTextColor(valColor, COLOR_BG);
+    tft->drawString(valBuf, cx, 112, 2);
+
+    // Boton [-] (y=128, h=28)
+    tft->fillRoundRect(bx, 128, colW, 28, 4, btnColor);
+    tft->setTextColor(COLOR_TEXT, btnColor);
+    tft->drawString("-", cx, 142, 2);
+  }
+
+  // Separador
+  tft->drawFastHLine(10, 164, SCREEN_W - 20, COLOR_TEXT_DIM);
+
+  // Preview de la fecha/hora configurada
+  char prevBuf[24];
+  snprintf(prevBuf, sizeof(prevBuf), "%04d-%02d-%02d %02d:%02d:%02d",
+           relojCampos[0], relojCampos[1], relojCampos[2],
+           relojCampos[3], relojCampos[4], relojCampos[5]);
+  tft->setTextColor(TFT_GREEN, COLOR_BG);
+  tft->drawString(prevBuf, SCREEN_W / 2, 176, 2);
+
+  // Boton GUARDAR (y=192, h=28)
+  tft->fillRoundRect(20, 192, 200, 28, 6, TFT_GREEN);
+  tft->drawRoundRect(20, 192, 200, 28, 6, TFT_WHITE);
+  tft->setTextColor(COLOR_BG, TFT_GREEN);
+  tft->drawString("GUARDAR", SCREEN_W / 2, 206, 2);
+
+  // Boton VOLVER (y=226, h=12)
+  tft->fillRoundRect(70, 224, 100, 14, 4, TFT_RED);
+  tft->setTextColor(COLOR_TEXT, TFT_RED);
+  tft->drawString("VOLVER", SCREEN_W / 2, 231, 1);
+}
+
 void drawInicioScreen() {
   tft->fillScreen(COLOR_BG);
 
@@ -750,6 +836,7 @@ void finalizarSesion() {
   menuActivo = false;
   pantallaInicio = false;
   pantallaGapaxion = false;
+  pantallaReloj = false;
   pantallaUsuario = true;
   usuarioActual = -1;
   gapaxionActual = -1;
@@ -1338,22 +1425,28 @@ void drawMenuScreen() {
   // Línea separadora
   tft->drawFastHLine(10, 130, SCREEN_W - 20, COLOR_TEXT_DIM);
 
-  // ── Botón FIN (y=140, h=30) — finalizar sesión ──
-  tft->fillRoundRect(20, 140, 200, 30, 6, TFT_ORANGE);
-  tft->drawRoundRect(20, 140, 200, 30, 6, TFT_YELLOW);
+  // ── Botón FIN (y=136, h=26) — finalizar sesión ──
+  tft->fillRoundRect(20, 136, 200, 26, 6, TFT_ORANGE);
+  tft->drawRoundRect(20, 136, 200, 26, 6, TFT_YELLOW);
   tft->setTextColor(COLOR_TEXT, TFT_ORANGE);
-  tft->drawString("FIN SESION", SCREEN_W / 2, 155, 2);
+  tft->drawString("FIN SESION", SCREEN_W / 2, 149, 2);
 
-  // ── Botón WALK MED (y=180, h=26) ──
-  tft->fillRoundRect(20, 180, 200, 26, 6, 0x0320);  // verde oscuro
-  tft->drawRoundRect(20, 180, 200, 26, 6, TFT_GREEN);
+  // ── Botón WALK MED (y=168, h=24) ──
+  tft->fillRoundRect(20, 168, 200, 24, 6, 0x0320);
+  tft->drawRoundRect(20, 168, 200, 24, 6, TFT_GREEN);
   tft->setTextColor(TFT_GREEN, 0x0320);
-  tft->drawString("WALK MED", SCREEN_W / 2, 193, 2);
+  tft->drawString("WALK MED", SCREEN_W / 2, 180, 2);
 
-  // Botón EXIT (y=210, h=26)
-  tft->fillRoundRect(20, 210, 200, 26, 4, TFT_RED);
+  // ── Botón RELOJ (y=198, h=24) — ajustar fecha/hora ──
+  tft->fillRoundRect(20, 198, 200, 24, 6, 0x4208);  // gris oscuro
+  tft->drawRoundRect(20, 198, 200, 24, 6, TFT_YELLOW);
+  tft->setTextColor(TFT_YELLOW, 0x4208);
+  tft->drawString("RELOJ", SCREEN_W / 2, 210, 2);
+
+  // Botón EXIT (y=228, h=12)
+  tft->fillRoundRect(70, 228, 100, 12, 4, TFT_RED);
   tft->setTextColor(COLOR_TEXT, TFT_RED);
-  tft->drawString("EXIT", SCREEN_W / 2, 223, 2);
+  tft->drawString("EXIT", SCREEN_W / 2, 234, 1);
 }
 
 void drawConnectScreen(const char* status, const char* detail) {
@@ -1738,20 +1831,103 @@ void loop() {
             finalizarWalkingMed();
           }
         }
+      } else if (pantallaReloj) {
+        // Touch en pantalla de configuración de reloj
+        int colW = 38, gapR = 2;
+        int startX = (SCREEN_W - 6 * colW - 5 * gapR) / 2;
+
+        // Botones [+] (y=68, h=28)
+        if (ty >= 68 && ty <= 96) {
+          for (int i = 0; i < 6; i++) {
+            int bx = startX + i * (colW + gapR);
+            if (tx >= bx && tx <= bx + colW) {
+              relojCampoSel = i;
+              // Incrementar con limites
+              switch (i) {
+                case 0: relojCampos[0] = constrain(relojCampos[0] + 1, 2020, 2099); break;
+                case 1: relojCampos[1]++; if (relojCampos[1] > 12) relojCampos[1] = 1; break;
+                case 2: relojCampos[2]++; if (relojCampos[2] > 31) relojCampos[2] = 1; break;
+                case 3: relojCampos[3]++; if (relojCampos[3] > 23) relojCampos[3] = 0; break;
+                case 4: relojCampos[4]++; if (relojCampos[4] > 59) relojCampos[4] = 0; break;
+                case 5: relojCampos[5]++; if (relojCampos[5] > 59) relojCampos[5] = 0; break;
+              }
+              drawRelojScreen();
+              break;
+            }
+          }
+        }
+        // Botones [-] (y=128, h=28)
+        else if (ty >= 128 && ty <= 156) {
+          for (int i = 0; i < 6; i++) {
+            int bx = startX + i * (colW + gapR);
+            if (tx >= bx && tx <= bx + colW) {
+              relojCampoSel = i;
+              // Decrementar con limites
+              switch (i) {
+                case 0: relojCampos[0] = constrain(relojCampos[0] - 1, 2020, 2099); break;
+                case 1: relojCampos[1]--; if (relojCampos[1] < 1) relojCampos[1] = 12; break;
+                case 2: relojCampos[2]--; if (relojCampos[2] < 1) relojCampos[2] = 31; break;
+                case 3: relojCampos[3]--; if (relojCampos[3] < 0) relojCampos[3] = 23; break;
+                case 4: relojCampos[4]--; if (relojCampos[4] < 0) relojCampos[4] = 59; break;
+                case 5: relojCampos[5]--; if (relojCampos[5] < 0) relojCampos[5] = 59; break;
+              }
+              drawRelojScreen();
+              break;
+            }
+          }
+        }
+        // Boton GUARDAR (y=192, h=28)
+        else if (ty >= 192 && ty <= 220 && tx >= 20 && tx <= 220) {
+          watch->rtc->setDateTime(
+            (uint16_t)relojCampos[0], (uint8_t)relojCampos[1], (uint8_t)relojCampos[2],
+            (uint8_t)relojCampos[3],  (uint8_t)relojCampos[4], (uint8_t)relojCampos[5]
+          );
+          Serial.printf("[RTC] Reloj actualizado: %04d-%02d-%02d %02d:%02d:%02d\n",
+                        relojCampos[0], relojCampos[1], relojCampos[2],
+                        relojCampos[3], relojCampos[4], relojCampos[5]);
+          // Feedback visual
+          tft->fillRoundRect(20, 192, 200, 28, 6, TFT_WHITE);
+          tft->setTextColor(COLOR_BG, TFT_WHITE);
+          tft->setTextDatum(MC_DATUM);
+          tft->drawString("GUARDADO!", SCREEN_W / 2, 206, 2);
+          delay(800);
+          pantallaReloj = false;
+          menuActivo = true;
+          drawMenuScreen();
+        }
+        // Boton VOLVER (y=224, h=14)
+        else if (ty >= 222 && ty <= 240 && tx >= 70 && tx <= 170) {
+          pantallaReloj = false;
+          menuActivo = true;
+          drawMenuScreen();
+        }
       } else if (menuActivo) {
         // Touch en pantalla menú (desde inicio)
         if (ty >= 94 && ty <= 122) {
           if (tx >= 5 && tx <= 71)        { umbralVibracion = (umbralVibracion == 70) ? 0 : 70; drawMenuScreen(); }
           else if (tx >= 76 && tx <= 142) { umbralVibracion = (umbralVibracion == 80) ? 0 : 80; drawMenuScreen(); }
           else if (tx >= 147 && tx <= 213){ umbralVibracion = (umbralVibracion == 90) ? 0 : 90; drawMenuScreen(); }
-        } else if (ty >= 140 && ty <= 170) {          // Botón FIN SESION
+        } else if (ty >= 136 && ty <= 162) {          // Botón FIN SESION
           finalizarSesion();
-        } else if (ty >= 180 && ty <= 206) {          // Botón WALK MED
+        } else if (ty >= 168 && ty <= 192) {          // Botón WALK MED
           walkingMedActivo = true;
           walkingMedSeleccion = true;
           menuActivo = false;
           drawWalkingSelScreen();
-        } else if (ty >= 210 && ty <= 236) {
+        } else if (ty >= 198 && ty <= 222) {          // Botón RELOJ
+          menuActivo = false;
+          pantallaReloj = true;
+          // Cargar valores actuales del RTC
+          RTC_Date dt = watch->rtc->getDateTime();
+          relojCampos[0] = dt.year;
+          relojCampos[1] = dt.month;
+          relojCampos[2] = dt.day;
+          relojCampos[3] = dt.hour;
+          relojCampos[4] = dt.minute;
+          relojCampos[5] = dt.second;
+          relojCampoSel = 0;
+          drawRelojScreen();
+        } else if (ty >= 228 && ty <= 240) {          // Botón EXIT
           menuActivo = false;
           drawInicioScreen();
         }
