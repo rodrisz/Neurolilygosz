@@ -111,6 +111,43 @@ volatile uint32_t eegMidGamma  = 0;
 float indiceFatiga = 0.0;   // IFN = (Theta + Alpha) / Beta
 float ratioCarga   = 0.0;   // RC  = Beta / Alpha
 
+// ─── FREERTOS DUAL-CORE (Core 0: BT+SD) ──────────────────────────────────
+#include "freertos/semphr.h"
+
+struct NeuroData {
+  uint8_t  poorSignal;
+  uint8_t  attention;
+  uint8_t  meditation;
+  uint8_t  blinkStrength;
+  int16_t  rawWave;
+  uint32_t eegDelta, eegTheta, eegLowAlpha, eegHighAlpha;
+  uint32_t eegLowBeta, eegHighBeta, eegLowGamma, eegMidGamma;
+  float    indiceFatiga;
+  float    ratioCarga;
+  bool     dataReceived;
+  uint32_t totalPackets;
+  uint32_t badChecksums;
+  unsigned long lastPacketTime;
+};
+
+NeuroData          neuroShared;              // datos compartidos protegidos por mutex
+SemaphoreHandle_t  neuroMutex   = NULL;      // mutex para neuroShared
+SemaphoreHandle_t  sdMutex      = NULL;      // mutex para archivoSesion/sdLogging
+TaskHandle_t       btTaskHandle = NULL;      // handle de la tarea Core 0
+volatile bool      btTaskRunning = false;    // flag para detener la tarea
+
+// Timestamp cacheado del RTC (escrito por Core 1, leido por Core 0)
+char cachedFecha[12] = "0000-00-00";         // "YYYY-MM-DD"
+char cachedHora[10]  = "00:00:00";           // "HH:MM:SS"
+SemaphoreHandle_t  rtcCacheMutex = NULL;     // mutex para timestamp cacheado
+unsigned long lastRtcCacheUpdate = 0;
+
+// Forward declarations Core 0
+void btSdTask(void *param);
+void readNeuroData();
+void escribirLineaSD_Core0();
+void actualizarCacheRTC();
+
 // ─── PARSER STATE MACHINE ──────────────────────────────────────────────────
 enum ParserState {
   WAIT_SYNC1,
@@ -461,6 +498,30 @@ void parseByte(uint8_t b) {
           lastPacketTime = millis();
           totalPackets++;
           parsePayload(payloadBuf, pLength);
+
+          // Copiar datos parseados al struct compartido (Core 0 → Core 1)
+          if (neuroMutex && xSemaphoreTake(neuroMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            neuroShared.poorSignal     = poorSignal;
+            neuroShared.attention      = attention;
+            neuroShared.meditation     = meditation;
+            neuroShared.blinkStrength  = blinkStrength;
+            neuroShared.rawWave        = rawWave;
+            neuroShared.eegDelta       = eegDelta;
+            neuroShared.eegTheta       = eegTheta;
+            neuroShared.eegLowAlpha    = eegLowAlpha;
+            neuroShared.eegHighAlpha   = eegHighAlpha;
+            neuroShared.eegLowBeta     = eegLowBeta;
+            neuroShared.eegHighBeta    = eegHighBeta;
+            neuroShared.eegLowGamma    = eegLowGamma;
+            neuroShared.eegMidGamma    = eegMidGamma;
+            neuroShared.indiceFatiga   = indiceFatiga;
+            neuroShared.ratioCarga     = ratioCarga;
+            neuroShared.dataReceived   = dataReceived;
+            neuroShared.totalPackets   = totalPackets;
+            neuroShared.badChecksums   = badChecksums;
+            neuroShared.lastPacketTime = lastPacketTime;
+            xSemaphoreGive(neuroMutex);
+          }
         } else {
           badChecksums++;
         }
@@ -468,6 +529,127 @@ void parseByte(uint8_t b) {
       }
       break;
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CORE 0: TAREA BT + SD  (corre independiente del loop principal)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * readNeuroData() — Core 1 llama esto para copiar datos frescos desde
+ * neuroShared (escrito por Core 0) a las variables globales que usa la UI.
+ */
+void readNeuroData() {
+  if (neuroMutex && xSemaphoreTake(neuroMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    poorSignal     = neuroShared.poorSignal;
+    attention      = neuroShared.attention;
+    meditation     = neuroShared.meditation;
+    blinkStrength  = neuroShared.blinkStrength;
+    rawWave        = neuroShared.rawWave;
+    eegDelta       = neuroShared.eegDelta;
+    eegTheta       = neuroShared.eegTheta;
+    eegLowAlpha    = neuroShared.eegLowAlpha;
+    eegHighAlpha   = neuroShared.eegHighAlpha;
+    eegLowBeta     = neuroShared.eegLowBeta;
+    eegHighBeta    = neuroShared.eegHighBeta;
+    eegLowGamma    = neuroShared.eegLowGamma;
+    eegMidGamma    = neuroShared.eegMidGamma;
+    indiceFatiga   = neuroShared.indiceFatiga;
+    ratioCarga     = neuroShared.ratioCarga;
+    dataReceived   = neuroShared.dataReceived;
+    totalPackets   = neuroShared.totalPackets;
+    badChecksums   = neuroShared.badChecksums;
+    lastPacketTime = neuroShared.lastPacketTime;
+    xSemaphoreGive(neuroMutex);
+  }
+}
+
+/**
+ * actualizarCacheRTC() — Core 1 llama cada ~1s para cachear el timestamp
+ * del RTC (I2C). Core 0 lee este cache para escribir en SD sin tocar I2C.
+ */
+void actualizarCacheRTC() {
+  RTC_Date dt = watch->rtc->getDateTime();
+  if (rtcCacheMutex && xSemaphoreTake(rtcCacheMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    snprintf(cachedFecha, sizeof(cachedFecha), "%04d-%02d-%02d", dt.year, dt.month, dt.day);
+    snprintf(cachedHora,  sizeof(cachedHora),  "%02d:%02d:%02d", dt.hour, dt.minute, dt.second);
+    xSemaphoreGive(rtcCacheMutex);
+  }
+}
+
+/**
+ * escribirLineaSD_Core0() — Escribe una linea CSV desde Core 0.
+ * Usa timestamp cacheado (no accede I2C) y datos del parser (ya en Core 0).
+ */
+void escribirLineaSD_Core0() {
+  if (!sdLogging || !archivoSesion) return;
+
+  // Leer timestamp cacheado
+  char fecha[12], hora[10];
+  if (rtcCacheMutex && xSemaphoreTake(rtcCacheMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    memcpy(fecha, cachedFecha, sizeof(fecha));
+    memcpy(hora,  cachedHora,  sizeof(hora));
+    xSemaphoreGive(rtcCacheMutex);
+  } else {
+    strncpy(fecha, "----.--.--", sizeof(fecha));
+    strncpy(hora,  "--:--:--",   sizeof(hora));
+  }
+
+  char linea[200];
+  snprintf(linea, sizeof(linea),
+    "%d,%s,%s,%d,%d,%d,%.2f,%.2f,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu",
+    sesionNumero,
+    fecha, hora,
+    attention, meditation, poorSignal,
+    indiceFatiga, ratioCarga,
+    eegDelta, eegTheta, eegLowAlpha, eegHighAlpha,
+    eegLowBeta, eegHighBeta, eegLowGamma, eegMidGamma
+  );
+
+  if (sdMutex && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    archivoSesion.println(linea);
+    archivoSesion.flush();
+    xSemaphoreGive(sdMutex);
+  }
+}
+
+/**
+ * btSdTask() — Tarea FreeRTOS en Core 0.
+ * Lee bytes BT, parsea ThinkGear, escribe SD cada 1s.
+ * Corre mientras btTaskRunning == true.
+ */
+void btSdTask(void *param) {
+  Serial.println("[CORE0] Tarea BT+SD iniciada");
+  unsigned long taskLastSDWrite = millis();
+
+  while (btTaskRunning) {
+    // ── Leer y parsear bytes BT ──
+    if (btConnected && SerialBT.connected()) {
+      int avail = SerialBT.available();
+      while (avail > 0) {
+        uint8_t b = SerialBT.read();
+        parseByte(b);
+        avail--;
+      }
+    } else if (btConnected && !SerialBT.connected()) {
+      // Conexion perdida — señalar a Core 1
+      btConnected = false;
+      Serial.println("[CORE0] Conexion BT perdida");
+    }
+
+    // ── Escribir SD cada SD_WRITE_INTERVAL ──
+    unsigned long now = millis();
+    if (sdLogging && (now - taskLastSDWrite >= SD_WRITE_INTERVAL)) {
+      taskLastSDWrite = now;
+      escribirLineaSD_Core0();
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(1));  // ceder a WiFi/BT stack en Core 0
+  }
+
+  Serial.println("[CORE0] Tarea BT+SD finalizada");
+  btTaskHandle = NULL;
+  vTaskDelete(NULL);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -821,7 +1003,21 @@ void cerrarLogSD() {
 }
 
 void finalizarSesion() {
-  cerrarLogSD();
+  // Detener tarea Core 0 primero (antes de cerrar SD y BT)
+  if (btTaskRunning) {
+    btTaskRunning = false;
+    vTaskDelay(pdMS_TO_TICKS(50));  // esperar a que la tarea termine su ciclo
+    Serial.println("[CORE0] Tarea detenida");
+  }
+
+  // Cerrar SD bajo mutex (la tarea ya no escribe)
+  if (sdMutex && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    cerrarLogSD();
+    xSemaphoreGive(sdMutex);
+  } else {
+    cerrarLogSD();
+  }
+
   drvStop();
   if (btIniciado) {
     SerialBT.disconnect();
@@ -1495,8 +1691,14 @@ void setup() {
   Serial.begin(115200);
   Serial.println("\n══════════════════════════════════════");
   Serial.println("  NEURO-CRAWLER x T-Watch x MindWave");
-  Serial.println("  Bluetooth SPP @ 57600 baud");
+  Serial.println("  Bluetooth SPP @ 57600 baud  [DUAL-CORE]");
   Serial.println("══════════════════════════════════════");
+
+  // ── Crear mutexes FreeRTOS ──
+  neuroMutex    = xSemaphoreCreateMutex();
+  sdMutex       = xSemaphoreCreateMutex();
+  rtcCacheMutex = xSemaphoreCreateMutex();
+  Serial.println("[RTOS] Mutexes creados (neuro, sd, rtcCache)");
 
   // ── Inicializar T-Watch ──
   watch = TTGOClass::getWatch();
@@ -1696,7 +1898,16 @@ void loop() {
       drawWalkingScreen();
     }
 
-    return;  // no procesar el resto del loop durante ejercicio
+    // Si BT conectado, seguir leyendo datos y actualizando cache RTC
+    if (btConnected && btTaskRunning) {
+      readNeuroData();
+      if (now - lastRtcCacheUpdate >= 1000) {
+        lastRtcCacheUpdate = now;
+        actualizarCacheRTC();
+      }
+    }
+
+    return;  // no procesar pantalla principal durante ejercicio
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -2015,6 +2226,24 @@ void loop() {
         // Iniciar logging en SD
         iniciarLogSD();
 
+        // Cachear timestamp RTC antes de iniciar Core 0
+        actualizarCacheRTC();
+
+        // Iniciar tarea Core 0 para BT+SD
+        if (!btTaskHandle) {
+          btTaskRunning = true;
+          xTaskCreatePinnedToCore(
+            btSdTask,        // funcion de la tarea
+            "BT_SD",         // nombre
+            8192,            // stack (bytes)
+            NULL,            // parametro
+            1,               // prioridad
+            &btTaskHandle,   // handle
+            0                // Core 0
+          );
+          Serial.println("[CORE0] Tarea BT+SD lanzada en Core 0");
+        }
+
       } else {
         Serial.println("[BT] connect() retorno FALSE");
         Serial.println("[BT] Verifica:");
@@ -2040,27 +2269,24 @@ void loop() {
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  // FASE 2: LECTURA Y PARSEO THINKGEAR
+  // FASE 2: LEER DATOS COMPARTIDOS DESDE CORE 0
   // ════════════════════════════════════════════════════════════════════════
 
-  // Verificar conexión activa
-  if (!SerialBT.connected()) {
-    Serial.println("[BT] Conexion perdida! Reconectando...");
-    btConnected = false;
+  // btConnected puede ser puesto a false por Core 0 si pierde conexion
+  if (!btConnected) {
     btStatus = "Desconectado";
     connectAttemptTime = 0;
     drawConnectScreen("Desconectado", "Reconectando...");
     return;
   }
 
-  // Leer TODOS los bytes disponibles del stream BT
-  // El MindWave envía ~513 paquetes/segundo a 57600 baud
-  // (512 paquetes raw de 7 bytes + 1 paquete grande ~1/seg)
-  int bytesAvailable = SerialBT.available();
-  while (bytesAvailable > 0) {
-    uint8_t b = SerialBT.read();
-    parseByte(b);
-    bytesAvailable--;
+  // Traer datos frescos parseados por Core 0
+  readNeuroData();
+
+  // Actualizar cache RTC cada ~1 segundo (I2C seguro en Core 1)
+  if (now - lastRtcCacheUpdate >= 1000) {
+    lastRtcCacheUpdate = now;
+    actualizarCacheRTC();
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -2071,7 +2297,36 @@ void loop() {
   if (watch->getTouch(tx, ty) && (now - lastTouchTime > 400)) {
     lastTouchTime = now;
 
-    if (menuActivo) {
+    if (walkingMedActivo && walkingMedSeleccion) {
+      // Touch en pantalla selección Walking Meditation (estando conectado)
+      if (ty >= 105 && ty <= 135) {
+        if (tx >= 5 && tx <= 71)        { walkNivel = 1; drawWalkingSelScreen(); }
+        else if (tx >= 76 && tx <= 142) { walkNivel = 2; drawWalkingSelScreen(); }
+        else if (tx >= 147 && tx <= 213){ walkNivel = 3; drawWalkingSelScreen(); }
+      }
+      else if (ty >= 152 && ty <= 178) {
+        if (tx >= 20 && tx <= 110)       { walkDeteccionMode = 0; drawWalkingSelScreen(); }
+        else if (tx >= 130 && tx <= 220) { walkDeteccionMode = 1; drawWalkingSelScreen(); }
+      }
+      else if (ty >= 188 && ty <= 218 && tx >= 30 && tx <= 210) {
+        iniciarWalkingExercise();
+      }
+      else if (ty >= 224 && ty <= 238 && tx >= 60 && tx <= 180) {
+        finalizarWalkingMed();
+        lastDisplayUpdate = 0; // forzar redibujado pantalla principal
+      }
+    } else if (walkingMedActivo && walkingMedResultado) {
+      // Touch en pantalla resultado Walking Meditation (estando conectado)
+      if (ty >= 195 && ty <= 221 && tx >= 20 && tx <= 115) {
+        walkingMedResultado = false;
+        walkingMedSeleccion = true;
+        drawWalkingSelScreen();
+      }
+      else if (ty >= 195 && ty <= 221 && tx >= 125 && tx <= 220) {
+        finalizarWalkingMed();
+        lastDisplayUpdate = 0; // forzar redibujado pantalla principal
+      }
+    } else if (menuActivo) {
       // Touch en pantalla menú — botones 70/80/90 en fila horizontal
       if (ty >= 94 && ty <= 122) {
         if (tx >= 5 && tx <= 71)        { umbralVibracion = (umbralVibracion == 70) ? 0 : 70; drawMenuScreen(); }
@@ -2084,7 +2339,6 @@ void loop() {
         walkingMedActivo = true;
         walkingMedSeleccion = true;
         menuActivo = false;
-        pantallaInicio = true;  // volver a inicio al salir de walking med
         drawWalkingSelScreen();
       } else if (ty >= 210 && ty <= 236) {           // Botón Exit
         menuActivo = false;
@@ -2103,7 +2357,7 @@ void loop() {
   // FASE 4: ACTUALIZAR PANTALLA
   // ════════════════════════════════════════════════════════════════════════
 
-  if (!menuActivo && now - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
+  if (!menuActivo && !walkingMedActivo && now - lastDisplayUpdate >= DISPLAY_INTERVAL_MS) {
     lastDisplayUpdate = now;
     drawMainScreen();
 
@@ -2118,11 +2372,7 @@ void loop() {
                     eegLowBeta, eegHighBeta, eegLowGamma, eegMidGamma);
     }
 
-    // Grabar datos en SD Card
-    if (sdLogging && (now - lastSDWrite >= SD_WRITE_INTERVAL)) {
-      lastSDWrite = now;
-      escribirLineaSD();
-    }
+    // SD Card: escritura movida a Core 0 (btSdTask)
   }
 
   // ════════════════════════════════════════════════════════════════════════
